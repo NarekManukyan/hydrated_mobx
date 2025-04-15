@@ -1,25 +1,26 @@
 name: hydrated_mobx_example
-description: A simple example of using hydrated_mobx for state persistence.
+description: "A new Flutter project."
 publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=2.14.0 <4.0.0'
+  flutter: ">=3.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  mobx: ^2.5.0
-  flutter_mobx: ^2.1.0
   hydrated_mobx:
     path: ../
-  path_provider: ^2.1.2
+  mobx: ^2.5.0
+  flutter_mobx: ^2.0.6+5
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  build_runner: ^2.4.8
-  mobx_codegen: ^2.5.0
+  flutter_lints: ^2.0.0
+  build_runner: ^2.3.3
+  mobx_codegen: ^2.0.7+3
 
 flutter:
   uses-material-design: true

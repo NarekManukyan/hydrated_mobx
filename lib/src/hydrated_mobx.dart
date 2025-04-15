@@ -3,10 +3,9 @@
 import 'dart:async';
 import 'dart:developer';
 
+import 'package:hydrated_mobx/src/hydrated_storage.dart';
 import 'package:meta/meta.dart';
 import 'package:mobx/mobx.dart';
-
-import 'hydrated_storage.dart';
 
 /// {@template hydrated_mobx}
 /// A mixin which enables automatic state persistence for classes using [Store].
