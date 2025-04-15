@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1] - 2024-04-17
+
+### Fixed
+- Fixed dependency version constraints for better compatibility
+- Resolved potential race conditions in state persistence
+- Improved error handling for storage operations
+
 ## [1.1.0] - 2024-04-17
 
 ### Changed

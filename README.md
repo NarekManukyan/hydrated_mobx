@@ -15,7 +15,7 @@ and the Flutter guide for
 
 A Flutter package that automatically persists and restores MobX stores. Built to work with Flutter's state management solution MobX.
 
-> This package uses some code from [hydrated_bloc](https://pub.dev/packages/hydrated_mobx) by Narek Manukyan, which is licensed under the MIT License. We extend our gratitude to the original authors for their work.
+> This package uses some code from [hydrated_bloc](https://pub.dev/packages/hydrated_bloc) by Felix Angelov, which is licensed under the MIT License. We extend our gratitude to the original authors for their work.
 
 ## Features
 
@@ -31,7 +31,7 @@ Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  hydrated_mobx: ^1.1.0
+  hydrated_mobx: ^1.1.1
 ```
 
 ## Usage
