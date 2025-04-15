@@ -3,9 +3,9 @@ import 'package:mobx/mobx.dart';
 
 part 'counter_store.g.dart';
 
-class CounterStore = _CounterStoreBase with _$CounterStore;
+class CounterStore = CounterStoreBase with _$CounterStore;
 
-abstract class _CounterStoreBase extends HydratedMobX {
+abstract class CounterStoreBase extends HydratedMobX with Store {
   @observable
   int count = 0;
 

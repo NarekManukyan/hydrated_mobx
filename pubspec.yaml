@@ -1,6 +1,6 @@
 name: hydrated_mobx
 description: 'An extension to the MobX state management library which automatically persists and restores MobX states.'
-version: 1.1.1
+version: 1.1.2
 homepage: https://github.com/NarekManukyan/hydrated_mobx
 repository: https://github.com/NarekManukyan/hydrated_mobx.git
 issue_tracker: https://github.com/NarekManukyan/hydrated_mobx/issues

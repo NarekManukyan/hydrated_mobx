@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.2] - 2024-04-17
+
+### Fixed
+- Fixed example project to work with latest API changes
+- Updated example dependencies to latest versions
+
 ## [1.1.1] - 2024-04-17
 
 ### Fixed

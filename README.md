@@ -64,7 +64,7 @@ part 'counter_store.g.dart';
 
 class CounterStore = _CounterStore with _$CounterStore;
 
-abstract class _CounterStore extends HydratedMobX {
+abstract class _CounterStore extends HydratedMobX  with Store{
   @observable
   int count = 0;
 

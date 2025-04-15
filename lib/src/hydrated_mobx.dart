@@ -55,7 +55,7 @@ abstract class HydratedMobX with Store {
   ///
   /// Example:
   /// ```dart
-  /// class CounterStore extends HydratedMobX {
+  /// class CounterStore extends HydratedMobX with Store {
   ///   @observable
   ///   int count = 0;
   ///
