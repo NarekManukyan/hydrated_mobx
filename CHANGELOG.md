@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0] - 2024-04-17
+
+### Changed
+- Breaking: Changed `HydratedMobX` from a mixin to an abstract class
+  - Now use `extends HydratedMobX` instead of `with HydratedMobX`
+  - This change provides better type safety and clearer inheritance structure
+
 ## [1.0.1] - 2024-04-16
 
 ### Added

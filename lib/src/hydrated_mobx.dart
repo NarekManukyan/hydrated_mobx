@@ -8,11 +8,16 @@ import 'package:meta/meta.dart';
 import 'package:mobx/mobx.dart';
 
 /// {@template hydrated_mobx}
-/// A mixin which enables automatic state persistence for classes using [Store].
+/// An abstract class which enables automatic state persistence for classes using [Store].
 /// This allows state to be persisted across hot restarts as well as complete app restarts.
 ///
+/// To use HydratedMobX, extend this class and implement the required methods:
+/// - [toJson] - Converts the store state to a JSON representation
+/// - [fromJson] - Restores the store state from a JSON representation
+///
+/// Example:
 /// ```dart
-/// class CounterStore with Store, HydratedMobx {
+/// class CounterStore extends HydratedMobX with Store {
 ///   CounterStore() {
 ///     hydrate();
 ///   }
@@ -36,8 +41,32 @@ import 'package:mobx/mobx.dart';
 /// }
 /// ```
 ///
+/// The store will automatically persist its state whenever it changes.
+/// The state will be restored when the store is initialized.
+///
 /// {@endtemplate}
-mixin HydratedMobx {
+
+abstract class HydratedMobX with Store {
+  /// Creates a new instance of [HydratedMobX] and automatically hydrates its state.
+  ///
+  /// The constructor calls [hydrate] which will:
+  /// - Attempt to restore the previous state from storage if it exists
+  /// - Set up automatic persistence of future state changes
+  ///
+  /// Example:
+  /// ```dart
+  /// class CounterStore extends HydratedMobX {
+  ///   @observable
+  ///   int count = 0;
+  ///
+  ///   // Constructor will automatically hydrate the state
+  ///   CounterStore() : super();
+  /// }
+  /// ```
+  HydratedMobX() {
+    hydrate();
+  }
+
   static Storage? _storage;
 
   /// Setter for instance of [Storage] which will be used to
@@ -56,7 +85,7 @@ mixin HydratedMobx {
   /// Populates the internal state storage with the latest state.
   /// This should be called in the constructor of the class using the mixin.
   void hydrate({Storage? storage}) {
-    __storage = storage ??= HydratedMobx.storage;
+    __storage = storage ??= HydratedMobX.storage;
     try {
       final stateJson = __storage.read(storageToken) as Map<dynamic, dynamic>?;
       if (stateJson != null) {

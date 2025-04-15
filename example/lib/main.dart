@@ -9,7 +9,7 @@ void main() async {
 
   // Initialize storage
   final appDocumentDir = await getApplicationDocumentsDirectory();
-  HydratedMobx.storage = await HydratedStorage.build(
+  HydratedMobX.storage = await HydratedStorage.build(
     storageDirectory: HydratedStorageDirectory(appDocumentDir.path),
   );
 
