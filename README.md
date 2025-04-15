@@ -46,10 +46,9 @@ import 'package:path_provider/path_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  HydratedMobX.storage = await HydratedStorage.build(
-    storageDirectory: kIsWeb
-        ? HydratedStorageDirectory.web
-        : HydratedStorageDirectory((await getTemporaryDirectory()).path),
+  final appDocumentDir = await getApplicationDocumentsDirectory();
+  HydratedMobx.storage = await HydratedStorage.build(
+    storageDirectory: HydratedStorageDirectory(appDocumentDir.path),
   );
   runApp(App());
 }
