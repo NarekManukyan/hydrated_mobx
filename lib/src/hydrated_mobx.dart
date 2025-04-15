@@ -1,10 +1,12 @@
 // ignore_for_file: avoid_catching_errors
 
 import 'dart:async';
+import 'dart:developer';
 
-import 'package:hydrated_mobx/src/hydrated_storage.dart';
 import 'package:meta/meta.dart';
 import 'package:mobx/mobx.dart';
+
+import 'hydrated_storage.dart';
 
 /// {@template hydrated_mobx}
 /// A mixin which enables automatic state persistence for classes using [Store].
@@ -63,14 +65,25 @@ mixin HydratedMobx {
         fromJson(json);
       }
     } catch (error, stackTrace) {
-      print('Error hydrating store: $error\n$stackTrace');
+      log(
+        'Error hydrating store: $error\n',
+        stackTrace: stackTrace,
+        name: 'HydratedMobx',
+      );
     }
 
     // Set up reaction to persist state changes
     autorun((_) {
       final json = toJson();
-      __storage.write(storageToken, json).catchError((error, stackTrace) {
-        print('Error persisting store: $error\n$stackTrace');
+      __storage.write(storageToken, json).catchError((
+        Object error,
+        StackTrace stackTrace,
+      ) {
+        log(
+          'Error persisting store: $error\n',
+          stackTrace: stackTrace,
+          name: 'HydratedMobx',
+        );
       });
     });
   }
