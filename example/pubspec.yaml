@@ -4,7 +4,7 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: '>=2.14.0 <4.0.0'
+  sdk: '>=2.17.0 <4.0.0'
   flutter: ">=3.0.0"
 
 dependencies:
@@ -14,6 +14,7 @@ dependencies:
     path: ../
   mobx: ^2.5.0
   flutter_mobx: ^2.0.6+5
+  path_provider: ^2.1.2
 
 dev_dependencies:
   flutter_test:
