@@ -24,27 +24,30 @@ class HydratedJson {
   HydratedJson._();
 
   /// Reads a list from [json] under [key]. Returns an empty list if the key is
-  /// missing, null, or not a [List]. Each element is converted with [fromJson].
+  /// missing, null, or not a [List]. Only list elements that are
+  /// [Map<String, dynamic>] are passed to [fromJson]; others are skipped.
   static List<T> readList<T>(
     Map<String, dynamic> json,
     String key,
-    T Function(dynamic) fromJson,
+    T Function(Map<String, dynamic>) fromJson,
   ) {
     final value = json[key];
     if (value == null) return <T>[];
     if (value is! List) return <T>[];
-    return value.map<T>((dynamic e) => fromJson(e)).toList();
+    return value.whereType<Map<String, dynamic>>().map<T>(fromJson).toList();
   }
 
   /// Reads a single object from [json] under [key]. Returns null if the key is
-  /// missing, null, or the [fromJson] callback returns null.
+  /// missing, the value is null, the value is not a [Map<String, dynamic>], or
+  /// [fromJson] returns null.
   static T? readObject<T>(
     Map<String, dynamic> json,
     String key,
-    T? Function(dynamic) fromJson,
+    T? Function(Map<String, dynamic>) fromJson,
   ) {
     final value = json[key];
     if (value == null) return null;
+    if (value is! Map<String, dynamic>) return null;
     return fromJson(value);
   }
 
