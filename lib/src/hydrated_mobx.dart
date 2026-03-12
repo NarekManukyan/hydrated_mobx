@@ -8,8 +8,8 @@ import 'package:meta/meta.dart';
 import 'package:mobx/mobx.dart';
 
 /// {@template hydrated_mobx}
-/// An abstract class which enables automatic state persistence for classes using [Store].
-/// This allows state to be persisted across hot restarts as well as complete app restarts.
+/// An abstract class which enables automatic state persistence for classes
+/// using [Store]. State can be persisted across hot restarts and app restarts.
 ///
 /// To use HydratedMobX, extend this class and implement the required methods:
 /// - [toJson] - Converts the store state to a JSON representation
@@ -47,25 +47,15 @@ import 'package:mobx/mobx.dart';
 /// {@endtemplate}
 
 abstract class HydratedMobX with Store {
-  /// Creates a new instance of [HydratedMobX] and automatically hydrates its state.
+  /// Creates a new instance and hydrates its state.
   ///
-  /// The constructor calls [hydrate] which will:
-  /// - Attempt to restore the previous state from storage if it exists
-  /// - Set up automatic persistence of future state changes
-  ///
-  /// Example:
-  /// ```dart
-  /// class CounterStore extends HydratedMobX with Store {
-  ///   @observable
-  ///   int count = 0;
-  ///
-  ///   // Constructor will automatically hydrate the state
-  ///   CounterStore() : super();
-  /// }
-  /// ```
-  HydratedMobX() {
+  /// Optional [storeId]: use for per-instance storage (e.g. per meeting).
+  /// Forward with `super(storeId: meetingId)` so the correct key is used.
+  HydratedMobX({String? storeId}) : _constructorStorageId = storeId {
     hydrate();
   }
+
+  final String? _constructorStorageId;
 
   static Storage? _storage;
 
@@ -264,9 +254,9 @@ abstract class HydratedMobX with Store {
   String get storagePrefix => runtimeType.toString();
 
   /// `storageToken` is used as registration token for hydrated storage.
-  /// Composed of [storagePrefix] and [id].
+  /// Uses the optional constructor argument when provided, otherwise [id].
   @nonVirtual
-  String get storageToken => '$storagePrefix$id';
+  String get storageToken => '$storagePrefix${_constructorStorageId ?? id}';
 
   /// [clear] is used to wipe or invalidate the cache of a store.
   /// Calling [clear] will delete the cached state of the store
