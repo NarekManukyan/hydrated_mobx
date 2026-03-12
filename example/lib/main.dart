@@ -37,13 +37,18 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class CounterPage extends StatelessWidget {
+class CounterPage extends StatefulWidget {
   const CounterPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final counter = CounterStore();
+  State<CounterPage> createState() => _CounterPageState();
+}
 
+class _CounterPageState extends State<CounterPage> {
+  late final CounterStore counter = CounterStore();
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
@@ -91,13 +96,18 @@ class CounterPage extends StatelessWidget {
   }
 }
 
-class KeyedCounterPage extends StatelessWidget {
+class KeyedCounterPage extends StatefulWidget {
   const KeyedCounterPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final store = KeyedCounterStore(storeId: 'demo-scope');
+  State<KeyedCounterPage> createState() => _KeyedCounterPageState();
+}
 
+class _KeyedCounterPageState extends State<KeyedCounterPage> {
+  late final KeyedCounterStore store = KeyedCounterStore(storeId: 'demo-scope');
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
