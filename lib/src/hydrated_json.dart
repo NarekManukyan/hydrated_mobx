@@ -33,10 +33,7 @@ class HydratedJson {
     final value = json[key];
     if (value == null) return <T>[];
     if (value is! List) return <T>[];
-    return value
-        .map<T>((dynamic e) => fromJson(e))
-        .whereType<T>()
-        .toList();
+    return value.map<T>((dynamic e) => fromJson(e)).toList();
   }
 
   /// Reads a single object from [json] under [key]. Returns null if the key is

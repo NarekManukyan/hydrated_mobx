@@ -14,6 +14,10 @@
 - Documentation and example snippets updated for the `storeId` pattern and `HydratedJson` usage.
 - Resolved all analyzer/linter issues in `lib/` (comment references, line length, sort order).
 
+### Note (medium risk)
+
+- The optional `storeId` parameter touches **core persistence key generation**. The storage key is `storagePrefix + (storeId ?? id)`. Stores that do not pass `storeId` are unchanged (they still use `id`). If you rely on custom `id` logic or override storage keys, verify hydration/persistence behavior after upgrading. Other changes in this release are additive (HydratedJson, docs, example, iOS config).
+
 ## [1.1.2] - 2024-04-17
 
 ### Fixed
