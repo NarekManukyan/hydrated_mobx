@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.3] - 2025-03-12
+
+### Added
+
+- **Optional `storeId` parameter** on `HydratedMobX`: pass a per-instance storage key (e.g. `super(storeId: meetingId)`) so hydration uses the correct key before subclass fields are initialized. Works with dependency injection (e.g. injectable, get_it).
+- **`HydratedJson` helpers** for type-safe `fromJson`/`toJson`: `readList`, `readObject`, `readString`, `readInt`, `readDouble`, `readBool`, `writeList`. They return safe defaults when keys are missing or types are wrong, so you can avoid manual type checks and try/catch.
+- Example app: **KeyedCounterStore** and keyed counter page demonstrating per-instance storage with `storeId`.
+
+### Changed
+
+- Constructor is now the first member of `HydratedMobX` (linter compliance).
+- Documentation and example snippets updated for the `storeId` pattern and `HydratedJson` usage.
+- Resolved all analyzer/linter issues in `lib/` (comment references, line length, sort order).
+
 ## [1.1.2] - 2024-04-17
 
 ### Fixed

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:hydrated_mobx/hydrated_mobx.dart';
 import 'package:hydrated_mobx_example/counter_store.dart';
+import 'package:hydrated_mobx_example/keyed_counter_store.dart';
 import 'package:path_provider/path_provider.dart';
 
 void main() async {
@@ -27,7 +28,11 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: const CounterPage(),
+      initialRoute: '/',
+      routes: <String, WidgetBuilder>{
+        '/': (_) => const CounterPage(),
+        '/keyed': (_) => const KeyedCounterPage(),
+      },
     );
   }
 }
@@ -64,13 +69,67 @@ class CounterPage extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
           FloatingActionButton(
+            heroTag: 'counter_increment',
             onPressed: counter.increment,
             tooltip: 'Increment',
             child: const Icon(Icons.add),
           ),
           const SizedBox(height: 16),
           FloatingActionButton(
+            heroTag: 'counter_decrement',
             onPressed: counter.decrement,
+            tooltip: 'Decrement',
+            child: const Icon(Icons.remove),
+          ),
+        ],
+      ),
+      bottomNavigationBar: ListTile(
+        title: const Text('Open scoped counter (id override example)'),
+        onTap: () => Navigator.of(context).pushNamed('/keyed'),
+      ),
+    );
+  }
+}
+
+class KeyedCounterPage extends StatelessWidget {
+  const KeyedCounterPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final store = KeyedCounterStore(storeId: 'demo-scope');
+
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        title: const Text('Keyed counter (storageId override)'),
+      ),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            const Text('This store uses super(scopeKey) so storage key is unique.'),
+            Observer(
+              builder: (_) => Text(
+                '${store.count}',
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+            ),
+          ],
+        ),
+      ),
+      floatingActionButton: Column(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          FloatingActionButton(
+            heroTag: 'keyed_increment',
+            onPressed: store.increment,
+            tooltip: 'Increment',
+            child: const Icon(Icons.add),
+          ),
+          const SizedBox(height: 16),
+          FloatingActionButton(
+            heroTag: 'keyed_decrement',
+            onPressed: store.decrement,
             tooltip: 'Decrement',
             child: const Icon(Icons.remove),
           ),
