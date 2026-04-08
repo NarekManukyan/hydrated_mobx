@@ -51,8 +51,14 @@ abstract class HydratedMobX with Store {
   ///
   /// Optional [storeId]: use for per-instance storage (e.g. per meeting).
   /// Forward with `super(storeId: meetingId)` so the correct key is used.
-  HydratedMobX({String? storeId}) : _constructorStorageId = storeId {
-    hydrate();
+  ///
+  /// Optional [onHydrationError]: invoked when hydration fails. See
+  /// [HydrationErrorBehavior] for how the returned value affects persistence.
+  HydratedMobX({
+    String? storeId,
+    OnHydrationError onHydrationError = defaultOnHydrationError,
+  }) : _constructorStorageId = storeId {
+    hydrate(onHydrationError: onHydrationError);
   }
 
   final String? _constructorStorageId;
@@ -72,10 +78,43 @@ abstract class HydratedMobX with Store {
 
   late final Storage __storage;
 
+  /// Registry of live instances so [Storage]-level clears can dispose every
+  /// store's persistence reaction before the underlying box is wiped.
+  static final Set<HydratedMobX> _instances = <HydratedMobX>{};
+
+  ReactionDisposer? _persistDisposer;
+  int _clearGeneration = 0;
+
+  /// Disposes the persistence reactions of every live [HydratedMobX] instance
+  /// and bumps their clear generation so any in-flight write scheduled by an
+  /// autorun is dropped instead of resurrecting cleared state.
+  ///
+  /// Intended to be called by [Storage] implementations from inside their
+  /// `clear()` before wiping the backing store.
+  @internal
+  static void disposeAllForClear() {
+    for (final instance in _instances) {
+      instance._clearGeneration++;
+      instance._persistDisposer?.call();
+      instance._persistDisposer = null;
+    }
+  }
+
   /// Populates the internal state storage with the latest state.
   /// This should be called in the constructor of the class using the mixin.
-  void hydrate({Storage? storage}) {
+  ///
+  /// [onHydrationError] is invoked when hydration fails. The returned
+  /// [HydrationErrorBehavior] determines whether subsequent state changes
+  /// overwrite the cached state ([HydrationErrorBehavior.overwrite], default)
+  /// or retain it ([HydrationErrorBehavior.retain]) — in which case no writes
+  /// are persisted from this instance until a future successful [hydrate].
+  void hydrate({
+    Storage? storage,
+    OnHydrationError onHydrationError = defaultOnHydrationError,
+  }) {
     __storage = storage ??= HydratedMobX.storage;
+    _instances.add(this);
+    var behavior = HydrationErrorBehavior.overwrite;
     try {
       final stateJson = __storage.read(storageToken) as Map<dynamic, dynamic>?;
       if (stateJson != null) {
@@ -88,10 +127,15 @@ abstract class HydratedMobX with Store {
         stackTrace: stackTrace,
         name: 'HydratedMobx',
       );
+      behavior = onHydrationError(error, stackTrace);
     }
 
     // Set up reaction to persist state changes
-    autorun((_) {
+    final myGeneration = _clearGeneration;
+    _persistDisposer = autorun((_) {
+      // Drop writes from reactions scheduled before a clear.
+      if (myGeneration != _clearGeneration) return;
+      if (behavior == HydrationErrorBehavior.retain) return;
       final json = _toJson(toJson());
       if (json != null) {
         __storage.write(storageToken, json).catchError((
@@ -261,7 +305,16 @@ abstract class HydratedMobX with Store {
   /// [clear] is used to wipe or invalidate the cache of a store.
   /// Calling [clear] will delete the cached state of the store
   /// but will not modify the current state of the store.
-  Future<void> clear() => __storage.delete(storageToken);
+  ///
+  /// After calling [clear], future observable changes will no longer be
+  /// persisted: the persistence reaction is disposed and any in-flight write
+  /// scheduled by it is dropped, so the cleared key cannot be resurrected.
+  Future<void> clear() async {
+    _clearGeneration++;
+    _persistDisposer?.call();
+    _persistDisposer = null;
+    await __storage.delete(storageToken);
+  }
 
   /// Responsible for converting the `Map<String, dynamic>` representation
   /// of the store state into a concrete instance of the store state.
@@ -351,6 +404,33 @@ class NIL {
   /// {@macro NIL}
   const NIL();
 }
+
+/// Determines how persistence should proceed when hydration fails.
+enum HydrationErrorBehavior {
+  /// Any newly emitted states will be persisted, which means the previously
+  /// cached state will be overwritten. This is the default behavior.
+  overwrite,
+
+  /// Any newly emitted states will not be persisted, which means the
+  /// previously cached state will be retained.
+  retain,
+}
+
+/// Signature for a callback invoked when hydration fails. Returns a
+/// [HydrationErrorBehavior] to control how subsequent state changes are
+/// persisted.
+typedef OnHydrationError = HydrationErrorBehavior Function(
+  Object error,
+  StackTrace stackTrace,
+);
+
+/// Default [OnHydrationError] handler. Returns
+/// [HydrationErrorBehavior.overwrite].
+HydrationErrorBehavior defaultOnHydrationError(
+  Object error,
+  StackTrace stackTrace,
+) =>
+    HydrationErrorBehavior.overwrite;
 
 enum _Outcome { atomic, complex }
 
