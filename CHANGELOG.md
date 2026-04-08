@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.4] - 2026-04-08
+
+### Added
+
+- Comprehensive test suite expanded from 4 to 59 tests across 14 groups, covering hydration edge cases (empty storage, corrupt JSON, `HydrationErrorBehavior.retain`), `storageToken` composition, autorun persistence, `store.clear()` / `HydratedStorage.clear()`, nested map/list serialization, cyclic and unsupported value errors, concurrent writes, encrypted storage via `HydratedAesCipher`, and full `HydratedJson` reader/writer coverage.
+
 ## [1.1.3] - 2026-03-12
 
 ### Added

@@ -6,6 +6,7 @@ import 'package:hive_ce/src/hive_impl.dart';
 import 'package:hydrated_mobx/src/_migration/_migration_stub.dart'
     if (dart.library.io) 'package:hydrated_mobx/src/_migration/_migration_io.dart';
 import 'package:hydrated_mobx/src/hydrated_cipher.dart';
+import 'package:hydrated_mobx/src/hydrated_mobx.dart';
 import 'package:meta/meta.dart';
 import 'package:synchronized/synchronized.dart';
 
@@ -148,7 +149,12 @@ class HydratedStorage implements Storage {
   @override
   Future<void> clear() async {
     if (_box.isOpen) {
-      return _lock.synchronized(_box.clear);
+      return _lock.synchronized(() async {
+        // Dispose every live store's persistence reaction first so that no
+        // autorun can re-write state into the box after we wipe it.
+        HydratedMobX.disposeAllForClear();
+        await _box.clear();
+      });
     }
   }
 
