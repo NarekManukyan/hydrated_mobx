@@ -1,10 +1,17 @@
 name: hydrated_mobx
 description: 'An extension to the MobX state management library which automatically persists and restores MobX states.'
-version: 1.1.4
+version: 1.2.0
 homepage: https://github.com/NarekManukyan/hydrated_mobx
 repository: https://github.com/NarekManukyan/hydrated_mobx.git
 issue_tracker: https://github.com/NarekManukyan/hydrated_mobx/issues
 documentation: https://github.com/NarekManukyan/hydrated_mobx#readme
+
+topics:
+  - mobx
+  - state-management
+  - persistence
+  - storage
+  - hydration
 
 platforms:
   android:
@@ -15,7 +22,7 @@ platforms:
   windows:
 
 environment:
-  sdk: '>=2.14.0 <4.0.0'
+  sdk: '>=3.0.0 <4.0.0'
 
 dependencies:
   hive_ce: ^2.0.0

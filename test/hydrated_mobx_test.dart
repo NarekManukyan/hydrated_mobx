@@ -61,11 +61,13 @@ class _MemoryStorage implements Storage {
 /// Observables are declared as field initialisers (not in the constructor body)
 /// so they are assigned before HydratedMobX calls hydrate() in super().
 class CounterStore extends HydratedMobX with Store {
-  CounterStore({String? storeId}) : super(storeId: storeId);
+  CounterStore({super.storeId});
 
   final Observable<int> _count = Observable(0, name: 'CounterStore.count');
-  late final Action increment =
-      Action(() => _count.value++, name: 'CounterStore.increment');
+  late final Action increment = Action(
+    () => _count.value++,
+    name: 'CounterStore.increment',
+  );
 
   int get count => _count.value;
 
@@ -101,10 +103,7 @@ class PrefixedStore extends HydratedMobX with Store {
 /// Store whose fromJson always throws — exercises hydration-error paths.
 class CorruptStore extends HydratedMobX with Store {
   CorruptStore({OnHydrationError? onHydrationError})
-      : super(
-          onHydrationError:
-              onHydrationError ?? defaultOnHydrationError,
-        );
+      : super(onHydrationError: onHydrationError ?? defaultOnHydrationError);
 
   final Observable<int> _value = Observable(0, name: 'CorruptStore.value');
 
@@ -125,8 +124,10 @@ class NullJsonStore extends HydratedMobX with Store {
   NullJsonStore() : super();
 
   final Observable<int> _count = Observable(0, name: 'NullJsonStore.count');
-  late final Action increment =
-      Action(() => _count.value++, name: 'NullJsonStore.increment');
+  late final Action increment = Action(
+    () => _count.value++,
+    name: 'NullJsonStore.increment',
+  );
 
   int get count => _count.value;
 
@@ -143,8 +144,10 @@ class NullJsonStore extends HydratedMobX with Store {
 class NestedStore extends HydratedMobX with Store {
   NestedStore() : super();
 
-  final Observable<Map<String, dynamic>> _data =
-      Observable(<String, dynamic>{}, name: 'NestedStore.data');
+  final Observable<Map<String, dynamic>> _data = Observable(
+    <String, dynamic>{},
+    name: 'NestedStore.data',
+  );
 
   Map<String, dynamic> get data => _data.value;
 
@@ -170,8 +173,10 @@ class Inner {
 class CustomObjectStore extends HydratedMobX with Store {
   CustomObjectStore() : super();
 
-  final Observable<Inner> _inner =
-      Observable(Inner(0), name: 'CustomObjectStore.inner');
+  final Observable<Inner> _inner = Observable(
+    Inner(0),
+    name: 'CustomObjectStore.inner',
+  );
 
   Inner get inner => _inner.value;
   set inner(Inner v) => runInAction(() => _inner.value = v);
@@ -320,32 +325,28 @@ void main() {
       expect(store.storageToken, equals('my_prefix_'));
     });
 
-    test('multiple instances with distinct storeIds use independent keys',
-        () async {
-      final mem = _MemoryStorage();
-      HydratedMobX.storage = mem;
+    test(
+      'multiple instances with distinct storeIds use independent keys',
+      () async {
+        final mem = _MemoryStorage();
+        HydratedMobX.storage = mem;
 
-      final a = CounterStore(storeId: 'a');
-      final b = CounterStore(storeId: 'b');
+        final a = CounterStore(storeId: 'a');
+        final b = CounterStore(storeId: 'b');
 
-      // Trigger observables through the store's own Action.
-      for (var i = 0; i < 10; i++) {
-        a.increment();
-      }
-      for (var i = 0; i < 20; i++) {
-        b.increment();
-      }
-      await _settle();
+        // Trigger observables through the store's own Action.
+        for (var i = 0; i < 10; i++) {
+          a.increment();
+        }
+        for (var i = 0; i < 20; i++) {
+          b.increment();
+        }
+        await _settle();
 
-      expect(
-        (mem.read('CounterStorea') as Map)['count'],
-        equals(10),
-      );
-      expect(
-        (mem.read('CounterStoreb') as Map)['count'],
-        equals(20),
-      );
-    });
+        expect((mem.read('CounterStorea') as Map)['count'], equals(10));
+        expect((mem.read('CounterStoreb') as Map)['count'], equals(20));
+      },
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -390,29 +391,31 @@ void main() {
 
   // -------------------------------------------------------------------------
   group('store.clear()', () {
-    test('removes the persisted key and survives subsequent mutations',
-        () async {
-      final store = CounterStore();
-      store.increment();
-      store.increment();
-      await _settle();
+    test(
+      'removes the persisted key and survives subsequent mutations',
+      () async {
+        final store = CounterStore();
+        store.increment();
+        store.increment();
+        await _settle();
 
-      expect(HydratedMobX.storage.read(store.storageToken), isNotNull);
+        expect(HydratedMobX.storage.read(store.storageToken), isNotNull);
 
-      await store.clear();
-      expect(HydratedMobX.storage.read(store.storageToken), isNull);
+        await store.clear();
+        expect(HydratedMobX.storage.read(store.storageToken), isNull);
 
-      // Mutate again — the autorun must NOT resurrect the cleared key.
-      store.increment();
-      await _settle();
+        // Mutate again — the autorun must NOT resurrect the cleared key.
+        store.increment();
+        await _settle();
 
-      expect(
-        HydratedMobX.storage.read(store.storageToken),
-        isNull,
-        reason:
-            'cleared key must not be re-written by the persistence autorun',
-      );
-    });
+        expect(
+          HydratedMobX.storage.read(store.storageToken),
+          isNull,
+          reason:
+              'cleared key must not be re-written by the persistence autorun',
+        );
+      },
+    );
 
     test('write queued before clear is dropped', () async {
       final store = CounterStore();
@@ -427,27 +430,29 @@ void main() {
 
   // -------------------------------------------------------------------------
   group('HydratedStorage.clear()', () {
-    test('wipes the box and prevents any live store from re-persisting',
-        () async {
-      final a = CounterStore(storeId: 'a');
-      final b = CounterStore(storeId: 'b');
-      a.increment();
-      b.increment();
-      await _settle();
+    test(
+      'wipes the box and prevents any live store from re-persisting',
+      () async {
+        final a = CounterStore(storeId: 'a');
+        final b = CounterStore(storeId: 'b');
+        a.increment();
+        b.increment();
+        await _settle();
 
-      expect(HydratedMobX.storage.read(a.storageToken), isNotNull);
-      expect(HydratedMobX.storage.read(b.storageToken), isNotNull);
+        expect(HydratedMobX.storage.read(a.storageToken), isNotNull);
+        expect(HydratedMobX.storage.read(b.storageToken), isNotNull);
 
-      await HydratedMobX.storage.clear();
+        await HydratedMobX.storage.clear();
 
-      // Mutate both stores after the global clear.
-      a.increment();
-      b.increment();
-      await _settle();
+        // Mutate both stores after the global clear.
+        a.increment();
+        b.increment();
+        await _settle();
 
-      expect(HydratedMobX.storage.read(a.storageToken), isNull);
-      expect(HydratedMobX.storage.read(b.storageToken), isNull);
-    });
+        expect(HydratedMobX.storage.read(a.storageToken), isNull);
+        expect(HydratedMobX.storage.read(b.storageToken), isNull);
+      },
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -576,8 +581,9 @@ void main() {
       await HydratedMobX.storage.close();
 
       final cipher = HydratedAesCipher(_makeKey('test_password'));
-      final encDir =
-          await Directory.systemTemp.createTemp('hydrated_enc_test_');
+      final encDir = await Directory.systemTemp.createTemp(
+        'hydrated_enc_test_',
+      );
       try {
         final encStorage = await HydratedStorage.build(
           storageDirectory: HydratedStorageDirectory(encDir.path),
@@ -654,10 +660,7 @@ void main() {
   // -------------------------------------------------------------------------
   group('HydratedJson – readDouble', () {
     test('returns double value', () {
-      expect(
-        HydratedJson.readDouble({'d': 3.14}, 'd'),
-        closeTo(3.14, 0.001),
-      );
+      expect(HydratedJson.readDouble({'d': 3.14}, 'd'), closeTo(3.14, 0.001));
     });
 
     test('coerces int to double', () {
@@ -666,10 +669,7 @@ void main() {
 
     test('returns defaultValue for missing key', () {
       expect(HydratedJson.readDouble({}, 'd'), equals(0.0));
-      expect(
-        HydratedJson.readDouble({}, 'd', defaultValue: 1.5),
-        equals(1.5),
-      );
+      expect(HydratedJson.readDouble({}, 'd', defaultValue: 1.5), equals(1.5));
     });
 
     test('returns defaultValue for null', () {
@@ -760,7 +760,9 @@ void main() {
   group('HydratedJson – readObject', () {
     test('returns parsed object for valid map value', () {
       final result = HydratedJson.readObject(
-        {'obj': <String, dynamic>{'x': 10}},
+        {
+          'obj': <String, dynamic>{'x': 10},
+        },
         'obj',
         (m) => m['x'] as int,
       );
@@ -772,10 +774,7 @@ void main() {
     });
 
     test('returns null for null value', () {
-      expect(
-        HydratedJson.readObject({'obj': null}, 'obj', (m) => m),
-        isNull,
-      );
+      expect(HydratedJson.readObject({'obj': null}, 'obj', (m) => m), isNull);
     });
 
     test('returns null for non-Map value', () {
@@ -800,10 +799,7 @@ void main() {
   // -------------------------------------------------------------------------
   group('HydratedJson – writeList', () {
     test('serialises list via toJson callback', () {
-      final result = HydratedJson.writeList(
-        [1, 2, 3],
-        (e) => {'v': e},
-      );
+      final result = HydratedJson.writeList([1, 2, 3], (e) => {'v': e});
       expect(
         result,
         equals([
@@ -834,4 +830,417 @@ void main() {
       expect(nil is List, isFalse);
     });
   });
+
+  // -------------------------------------------------------------------------
+  group('schema versioning / migrate', () {
+    late _MemoryStorage storage;
+
+    setUp(() {
+      storage = _MemoryStorage();
+      HydratedMobX.storage = storage;
+    });
+
+    test('migrates data written under an older version', () async {
+      // Legacy data: no version key, old field name.
+      await storage.write('VersionedStore', {'counter': 5});
+
+      final store = VersionedStore();
+      await _settle();
+
+      // migrate() renamed 'counter' -> 'count'.
+      expect(store.count, 5);
+      // Schema version is recorded (by the persistence reaction, after the
+      // state write) so migration does not run again.
+      expect(storage.read('VersionedStore.__version'), 2);
+    });
+
+    test('persists migrated state under the current schema', () async {
+      await storage.write('VersionedStore', {'counter': 7});
+
+      VersionedStore();
+      await _settle();
+
+      // The first autorun rewrote the state in the new shape.
+      expect(storage.read('VersionedStore'), {'count': 7});
+      expect(storage.read('VersionedStore.__version'), 2);
+    });
+
+    test('does not migrate when stored version matches', () async {
+      await storage.write('VersionedStore', {'count': 3});
+      await storage.write('VersionedStore.__version', 2);
+
+      final store = VersionedStore();
+
+      // 'counter' was never present; migrate() must not have run.
+      expect(store.count, 3);
+    });
+
+    test(
+      'treats missing version as 1 and does not migrate a v1 store',
+      () async {
+        await storage.write('CounterStore', {'count': 9});
+
+        final store = CounterStore();
+
+        expect(store.count, 9);
+        // A default (version == 1) store never writes a version key.
+        expect(storage.read('CounterStore.__version'), isNull);
+      },
+    );
+
+    test('migrate is not invoked when there is no persisted state', () async {
+      final store = VersionedStore();
+
+      // Nothing to migrate: state starts at the Dart default.
+      expect(store.count, 0);
+    });
+
+    test(
+        'a fresh version>1 store stamps its version and does not re-migrate '
+        'on the next launch', () async {
+      // First launch: empty storage, store ships at version 2.
+      final first = VersionedStore();
+      first.increment();
+      first.increment();
+      await _settle();
+
+      // State persisted in the v2 shape, tagged with version 2 — not left
+      // unversioned (which would make the next launch re-migrate).
+      expect(storage.read('VersionedStore'), {'count': 2});
+      expect(storage.read('VersionedStore.__version'), 2);
+
+      // Second launch on the same storage: migrate must NOT run against the
+      // already-current data, so the value survives.
+      final second = VersionedStore();
+      await _settle();
+      expect(second.count, 2);
+      expect(storage.read('VersionedStore'), {'count': 2});
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  group('importData', () {
+    late _MemoryStorage storage;
+
+    setUp(() {
+      storage = _MemoryStorage();
+      HydratedMobX.storage = storage;
+    });
+
+    test('seeds storage so a store hydrates from imported data', () async {
+      await HydratedMobX.importData({
+        'CounterStore': {'count': 42},
+      });
+
+      final store = CounterStore();
+
+      expect(store.count, 42);
+    });
+
+    test('does not overwrite existing keys by default', () async {
+      await storage.write('CounterStore', {'count': 1});
+
+      await HydratedMobX.importData({
+        'CounterStore': {'count': 99},
+      });
+
+      expect(storage.read('CounterStore'), {'count': 1});
+    });
+
+    test('overwrites existing keys when overwrite is true', () async {
+      await storage.write('CounterStore', {'count': 1});
+
+      await HydratedMobX.importData(
+        {
+          'CounterStore': {'count': 99},
+        },
+        overwrite: true,
+      );
+
+      expect(storage.read('CounterStore'), {'count': 99});
+    });
+
+    test('imports current-shape data for a versioned store without migrating',
+        () async {
+      // Seed already-v2 data and declare its version, so the store must NOT
+      // run its version-1 migration against it.
+      await HydratedMobX.importData(
+        {
+          'VersionedStore': {'count': 42},
+        },
+        version: 2,
+      );
+      expect(storage.read('VersionedStore.__version'), 2);
+
+      final store = VersionedStore();
+      await _settle();
+
+      // migrate() would have blown 'count' away (it removes 'counter'); it did
+      // not run, so the imported value survives.
+      expect(store.count, 42);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  group('onStorageError', () {
+    test('is invoked when a persistence write fails', () async {
+      HydratedMobX.storage = _FailingStorage();
+      final errors = <Object>[];
+
+      ErrorReportingStore(onStorageError: (error, _) => errors.add(error));
+      await _settle();
+
+      // The first autorun attempts to persist and fails.
+      expect(errors, isNotEmpty);
+      expect(errors.first, isA<Exception>());
+    });
+
+    test('default handler swallows the failure without throwing', () async {
+      HydratedMobX.storage = _FailingStorage();
+
+      // Constructing with the default handler must not throw despite the
+      // failing write.
+      expect(ErrorReportingStore.new, returnsNormally);
+      await _settle();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  group('clear(resume:)', () {
+    test('resume: true re-persists subsequent mutations', () async {
+      final mem = _MemoryStorage();
+      HydratedMobX.storage = mem;
+
+      final store = CounterStore();
+      addTearDown(store.dispose);
+      store.increment();
+      await _settle();
+      expect(mem.read(store.storageToken), isNotNull);
+
+      await store.clear(resume: true);
+      store.increment();
+      await _settle();
+
+      expect(
+        mem.read(store.storageToken),
+        {'count': 2},
+        reason: 'clear(resume: true) must keep persisting after the wipe',
+      );
+    });
+
+    test(
+      'default clear() still stops persisting (unchanged behavior)',
+      () async {
+        final mem = _MemoryStorage();
+        HydratedMobX.storage = mem;
+
+        final store = CounterStore();
+        addTearDown(store.dispose);
+        store.increment();
+        await _settle();
+
+        await store.clear();
+        store.increment();
+        await _settle();
+
+        expect(mem.read(store.storageToken), isNull);
+      },
+    );
+
+    test('clear() also deletes the paired version key', () async {
+      final mem = _MemoryStorage();
+      HydratedMobX.storage = mem;
+
+      final store = VersionedStore();
+      store.increment();
+      await _settle();
+      expect(mem.read('VersionedStore.__version'), 2);
+
+      await store.clear();
+
+      expect(mem.read('VersionedStore'), isNull);
+      expect(mem.read('VersionedStore.__version'), isNull);
+    });
+
+    test(
+        'a storage-level clear drops an in-flight version stamp '
+        '(no resurrection)', () async {
+      final mem = _MemoryStorage();
+      HydratedMobX.storage = mem;
+
+      final store = VersionedStore();
+      addTearDown(store.dispose);
+      // Schedule a state write + its pending version-stamp continuation, then
+      // wipe the whole box before the continuation resolves.
+      store.increment();
+      await mem.clear();
+      await _settle();
+
+      // The pending version stamp must not write the key back after the wipe.
+      expect(mem.read('VersionedStore'), isNull);
+      expect(
+        mem.read('VersionedStore.__version'),
+        isNull,
+        reason: 'a pending version stamp must not resurrect the key after a '
+            'storage-level clear',
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  group('dispose()', () {
+    test('stops persisting and leaves stored state untouched', () async {
+      final mem = _MemoryStorage();
+      HydratedMobX.storage = mem;
+
+      final store = CounterStore();
+      store.increment();
+      await _settle();
+      expect(mem.read(store.storageToken), {'count': 1});
+
+      store.dispose();
+      store.increment();
+      await _settle();
+
+      // No write after dispose; the on-disk value is left as-is.
+      expect(mem.read(store.storageToken), {'count': 1});
+    });
+
+    test('is safe to call more than once', () {
+      final store = CounterStore();
+      expect(
+        () {
+          store
+            ..dispose()
+            ..dispose();
+        },
+        returnsNormally,
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  group('re-hydrate', () {
+    test(
+      'calling hydrate() again does not leave a duplicate reaction',
+      () async {
+        final storage = _CountingStorage();
+        HydratedMobX.storage = storage;
+
+        final store = CounterStore();
+        await _settle();
+
+        // Re-arm; the previous reaction must be disposed, not duplicated.
+        store.hydrate();
+        storage.writes.clear();
+
+        store.increment();
+        await _settle();
+
+        expect(
+          storage.writes.where((key) => key == store.storageToken).length,
+          1,
+          reason: 'a single mutation must trigger exactly one write',
+        );
+      },
+    );
+  });
+}
+
+/// Store that bumps its schema [version] and migrates the renamed
+/// `counter` field to `count`.
+class VersionedStore extends HydratedMobX with Store {
+  VersionedStore() : super();
+
+  final Observable<int> _count = Observable(0, name: 'VersionedStore.count');
+  late final Action increment = Action(
+    () => _count.value++,
+    name: 'VersionedStore.increment',
+  );
+
+  int get count => _count.value;
+
+  @override
+  int get version => 2;
+
+  @override
+  Map<String, dynamic> migrate(int oldVersion, Map<String, dynamic> oldState) {
+    if (oldVersion < 2) {
+      oldState['count'] = oldState.remove('counter') ?? 0;
+    }
+    return oldState;
+  }
+
+  @override
+  Map<String, dynamic>? toJson() => {'count': _count.value};
+
+  @override
+  void fromJson(Map<String, dynamic> json) {
+    _count.value = (json['count'] as int?) ?? 0;
+  }
+}
+
+/// Storage that records the key of every write, used to detect duplicate
+/// persistence reactions.
+class _CountingStorage implements Storage {
+  final _data = <String, dynamic>{};
+  final writes = <String>[];
+
+  @override
+  dynamic read(String key) => _data[key];
+
+  @override
+  Future<void> write(String key, dynamic value) async {
+    writes.add(key);
+    _data[key] = value;
+  }
+
+  @override
+  Future<void> delete(String key) async => _data.remove(key);
+
+  @override
+  Future<void> clear() async {
+    HydratedMobX.disposeAllForClear();
+    _data.clear();
+  }
+
+  @override
+  Future<void> close() async {}
+}
+
+/// Storage whose writes always fail, used to exercise [OnStorageError].
+class _FailingStorage implements Storage {
+  @override
+  dynamic read(String key) => null;
+
+  @override
+  Future<void> write(String key, dynamic value) async =>
+      throw Exception('write failed');
+
+  @override
+  Future<void> delete(String key) async {}
+
+  @override
+  Future<void> clear() async => HydratedMobX.disposeAllForClear();
+
+  @override
+  Future<void> close() async {}
+}
+
+/// Store that forwards an [OnStorageError] handler to the mixin.
+class ErrorReportingStore extends HydratedMobX with Store {
+  ErrorReportingStore({super.onStorageError});
+
+  final Observable<int> _count = Observable(
+    0,
+    name: 'ErrorReportingStore.count',
+  );
+
+  @override
+  Map<String, dynamic>? toJson() => {'count': _count.value};
+
+  @override
+  void fromJson(Map<String, dynamic> json) {
+    _count.value = (json['count'] as int?) ?? 0;
+  }
 }

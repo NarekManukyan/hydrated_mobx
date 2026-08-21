@@ -48,6 +48,12 @@ class _CounterPageState extends State<CounterPage> {
   late final CounterStore counter = CounterStore();
 
   @override
+  void dispose() {
+    counter.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
@@ -105,6 +111,12 @@ class KeyedCounterPage extends StatefulWidget {
 
 class _KeyedCounterPageState extends State<KeyedCounterPage> {
   late final KeyedCounterStore store = KeyedCounterStore(storeId: 'demo-scope');
+
+  @override
+  void dispose() {
+    store.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

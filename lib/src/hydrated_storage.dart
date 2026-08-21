@@ -1,6 +1,12 @@
 import 'dart:async';
 
 import 'package:hive_ce/hive.dart';
+// hive_ce does not expose HiveImpl through its public API (the class is marked
+// "Not part of public API" and the global `Hive` is itself a HiveImpl). We need
+// a *separate* instance so this package never conflicts with an app that calls
+// `Hive.init` itself (https://github.com/hivedb/hive/issues/336), so importing
+// the implementation directly is unavoidable. The dependency is pinned to a
+// single major (`hive_ce: ^2`) to bound exposure to internal changes.
 // ignore: implementation_imports
 import 'package:hive_ce/src/hive_impl.dart';
 import 'package:hydrated_mobx/src/_migration/_migration_stub.dart'
@@ -129,6 +135,12 @@ class HydratedStorage implements Storage {
 
   final Box<dynamic> _box;
 
+  // Unlike write/delete/clear/close, read is intentionally not guarded by
+  // [_lock]. Hive's `get` is a synchronous, in-memory map lookup with no
+  // `await`, so on Dart's single-threaded event loop it cannot interleave with
+  // a mutating operation mid-flight. The lock only orders the async I/O of the
+  // mutating ops; guarding read would force it to become asynchronous for no
+  // correctness benefit.
   @override
   dynamic read(String key) => _box.isOpen ? _box.get(key) : null;
 
