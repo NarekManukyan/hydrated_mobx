@@ -180,11 +180,21 @@ abstract class HydratedMobX with Store {
     _instances.removeWhere((ref) {
       final instance = ref.target;
       if (instance == null) return true;
-      instance._clearGeneration++;
-      instance._persistDisposer?.call();
-      instance._persistDisposer = null;
+      instance._suspendForClear();
       return false;
     });
+  }
+
+  /// Drops this instance's persistence reaction and in-memory version stamp
+  /// ahead of a wipe, bumping the clear generation so any in-flight write
+  /// (state or version) scheduled before the clear is discarded.
+  void _suspendForClear() {
+    _clearGeneration++;
+    _persistDisposer?.call();
+    _persistDisposer = null;
+    // The box (version keys included) is about to be wiped, so drop the
+    // in-memory stamp too, matching instance clear().
+    _lastStampedVersion = null;
   }
 
   /// Populates the internal state storage with the latest state.
@@ -271,8 +281,15 @@ abstract class HydratedMobX with Store {
         // re-runs migration next launch) rather than ahead of it (which would
         // skip a required migration and corrupt data).
         stateWrite.then((_) {
-          _lastStampedVersion = version;
-          return __storage.write(_versionToken, version);
+          // Re-check the clear generation: a clear() may have run (and deleted
+          // the version key) while this continuation was pending. Without this
+          // guard the version write would resurrect the key clear() removed.
+          if (myGeneration != _clearGeneration) return null;
+          return __storage.write(_versionToken, version).then((_) {
+            // Flip the flag only after the write resolves, so a failed version
+            // write is retried by the next state change.
+            _lastStampedVersion = version;
+          });
         }).catchError(_onStorageError);
       } else {
         stateWrite.catchError(_onStorageError);

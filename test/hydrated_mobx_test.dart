@@ -1061,6 +1061,30 @@ void main() {
       expect(mem.read('VersionedStore'), isNull);
       expect(mem.read('VersionedStore.__version'), isNull);
     });
+
+    test(
+        'a storage-level clear drops an in-flight version stamp '
+        '(no resurrection)', () async {
+      final mem = _MemoryStorage();
+      HydratedMobX.storage = mem;
+
+      final store = VersionedStore();
+      addTearDown(store.dispose);
+      // Schedule a state write + its pending version-stamp continuation, then
+      // wipe the whole box before the continuation resolves.
+      store.increment();
+      await mem.clear();
+      await _settle();
+
+      // The pending version stamp must not write the key back after the wipe.
+      expect(mem.read('VersionedStore'), isNull);
+      expect(
+        mem.read('VersionedStore.__version'),
+        isNull,
+        reason: 'a pending version stamp must not resurrect the key after a '
+            'storage-level clear',
+      );
+    });
   });
 
   // -------------------------------------------------------------------------
