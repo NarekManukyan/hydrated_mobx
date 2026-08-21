@@ -171,24 +171,32 @@ class CounterStore extends HydratedMobX with Store {
 }
 ```
 
-When jumping multiple versions at once, handle every intermediate step inside
-`migrate` (for example a `switch` with fall-through on `oldVersion`).
+When jumping multiple versions at once, apply every intermediate step in order
+with stacked `if (oldVersion < N)` blocks. Dart `switch` cases do not fall
+through, so a `switch` would skip the intermediate upgrades.
 
 ### Importing existing data
 
 To bring data in from another persistence layer — `SharedPreferences`, a legacy
 Hive box, or a previous key scheme — seed the storage with
 `HydratedMobX.importData` after storage is set and before you construct the
-stores that should pick it up. Keys map to each store's `storageToken`
-(`'$storagePrefix$id'`). Existing keys are left untouched by default; pass
-`overwrite: true` to replace them.
+stores that should pick it up. Keys map to each store's `storageToken`,
+composed as `'$storagePrefix${storeId ?? id}'` (include the `storeId`/`id`
+component when the target store overrides it, and note that the default
+`storagePrefix` is `runtimeType`, which is not stable under `--obfuscate` —
+override `storagePrefix` on such stores so the key matches). Existing keys are
+left untouched by default; pass `overwrite: true` to replace them.
+
+If the store uses schema versioning (`version > 1`), pass the `version` of the
+data you are importing so it is not needlessly run through `migrate`; leave it
+at the default (`1`) for legacy data that should be migrated forward.
 
 ```dart
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   HydratedMobX.storage = await HydratedStorage.build(
     storageDirectory: HydratedStorageDirectory(
-      (await getTemporaryDirectory()).path,
+      (await getApplicationDocumentsDirectory()).path,
     ),
   );
 

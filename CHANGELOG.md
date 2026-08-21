@@ -9,12 +9,16 @@
   `Map<String, dynamic> migrate(int oldVersion, Map<String, dynamic> oldState)`
   (default: identity). When a store hydrates data written under a lower version,
   `migrate` is invoked to upgrade it, the result is passed to `fromJson`, and the
-  new schema version is recorded so migration runs only once. Data written before
-  this release has no version key and is treated as version 1. Resolves #1.
+  new schema version is recorded — stamped only after the state that produced it
+  has been written, so the version can never lead the state and skip a required
+  migration. Data written before this release has no version key and is treated
+  as version 1; `clear()` deletes the version key alongside the state.
 - **`HydratedMobX.importData(...)`** — a static helper to seed hydrated storage
   with data imported from another persistence layer (e.g. `SharedPreferences`, a
   legacy Hive box, or a previous key scheme) before constructing stores. Existing
-  keys are preserved by default; pass `overwrite: true` to replace them.
+  keys are preserved by default; pass `overwrite: true` to replace them. Pass
+  `version:` to tag imported data so a versioned store does not re-migrate data
+  that is already current.
 - **`OnStorageError` callback.** `HydratedMobX` now accepts an `onStorageError`
   handler (constructor and `hydrate`) invoked when persisting a state change
   fails. Persistence is fire-and-forget, so this is the only way to observe such

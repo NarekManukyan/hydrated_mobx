@@ -92,7 +92,14 @@ abstract class HydratedMobX with Store {
   ///
   /// [data] maps each [storageToken] to the JSON that a store of that token
   /// should hydrate from. Keys therefore follow the same
-  /// `'$storagePrefix$id'` composition used by [storageToken].
+  /// `'$storagePrefix${storeId ?? id}'` composition used by [storageToken] —
+  /// include the `storeId`/`id` component when the target store overrides it.
+  ///
+  /// [version] is the schema version the imported payloads are already in; it
+  /// is recorded so that a store whose [HydratedMobX.version] is higher does
+  /// **not** re-run [migrate] against data that is already current. Leave it at
+  /// the default (`1`) when importing legacy version-1 data that should be
+  /// migrated forward.
   ///
   /// By default, existing keys are left untouched so already-hydrated state is
   /// never clobbered; pass `overwrite: true` to replace them.
@@ -110,11 +117,15 @@ abstract class HydratedMobX with Store {
   static Future<void> importData(
     Map<String, Map<String, dynamic>> data, {
     bool overwrite = false,
+    int version = 1,
   }) async {
     final store = HydratedMobX.storage;
     for (final entry in data.entries) {
       if (!overwrite && store.read(entry.key) != null) continue;
       await store.write(entry.key, entry.value);
+      if (version > 1) {
+        await store.write('${entry.key}$_versionKeySuffix', version);
+      }
     }
   }
 
@@ -139,6 +150,15 @@ abstract class HydratedMobX with Store {
   ReactionDisposer? _persistDisposer;
   int _clearGeneration = 0;
   HydrationErrorBehavior _behavior = HydrationErrorBehavior.overwrite;
+
+  /// The schema [version] currently recorded on disk for this store, tracked so
+  /// the version key is stamped once (after the state write) rather than on
+  /// every state change. `null` means no version has been recorded yet.
+  int? _lastStampedVersion;
+
+  /// Suffix appended to a [storageToken] to form the key under which the
+  /// persisted schema [version] is stored.
+  static const _versionKeySuffix = '.__version';
 
   /// Registers this instance in [_instances] exactly once.
   void _register() {
@@ -184,18 +204,34 @@ abstract class HydratedMobX with Store {
     _onStorageError = onStorageError;
     _register();
     _behavior = HydrationErrorBehavior.overwrite;
+    // The version already recorded on disk (null/non-int means unversioned).
+    // The persistence reaction stamps [version] only after the state that
+    // produced it has been written, so the version can never lead the state.
+    final rawVersion = __storage.read(_versionToken);
+    if (rawVersion != null && rawVersion is! int) {
+      log(
+        'Persisted version for "$storageToken" is not an int ($rawVersion); '
+        'treating the data as unversioned.',
+        name: 'HydratedMobx',
+      );
+    }
+    _lastStampedVersion = _cast<int>(rawVersion);
     try {
       final stateJson = __storage.read(storageToken) as Map<dynamic, dynamic>?;
       if (stateJson != null) {
         var json = _fromJson(stateJson);
         // Data written before schema versioning existed has no version key and
         // is treated as version 1.
-        final storedVersion = _cast<int>(__storage.read(_versionToken)) ?? 1;
+        final storedVersion = _lastStampedVersion ?? 1;
         if (storedVersion < version) {
           json = migrate(storedVersion, json);
-          // The migrated state itself is persisted by the first autorun below;
-          // record the new schema version so migration does not run again.
-          __storage.write(_versionToken, version).catchError(_onStorageError);
+        } else if (storedVersion > version) {
+          log(
+            'Persisted schema version $storedVersion for "$storageToken" is '
+            'newer than the current version $version; loading without '
+            'migration. Data may not match the current schema.',
+            name: 'HydratedMobx',
+          );
         }
         fromJson(json);
       }
@@ -225,8 +261,21 @@ abstract class HydratedMobX with Store {
       if (myGeneration != _clearGeneration) return;
       if (_behavior == HydrationErrorBehavior.retain) return;
       final json = _toJson(toJson());
-      if (json != null) {
-        __storage.write(storageToken, json).catchError(_onStorageError);
+      if (json == null) return;
+      final stateWrite = __storage.write(storageToken, json);
+      // Only versioned stores (version > 1) record a version key; a default
+      // v1 store needs none (an absent key reads back as version 1).
+      if (version > 1 && _lastStampedVersion != version) {
+        // Stamp the schema version only after the state write succeeds, so a
+        // failure or crash leaves the version behind the state (which just
+        // re-runs migration next launch) rather than ahead of it (which would
+        // skip a required migration and corrupt data).
+        stateWrite.then((_) {
+          _lastStampedVersion = version;
+          return __storage.write(_versionToken, version);
+        }).catchError(_onStorageError);
+      } else {
+        stateWrite.catchError(_onStorageError);
       }
     });
   }
@@ -383,7 +432,7 @@ abstract class HydratedMobX with Store {
 
   /// Key under which the persisted schema [version] for this store is stored.
   @nonVirtual
-  String get _versionToken => '$storageToken.__version';
+  String get _versionToken => '$storageToken$_versionKeySuffix';
 
   /// The current schema version of this store's persisted state.
   ///
@@ -399,8 +448,10 @@ abstract class HydratedMobX with Store {
   /// Invoked during [hydrate] when the stored version is lower than [version],
   /// receiving the [oldVersion] the data was written under and the decoded
   /// [oldState]. Return the upgraded state; it is then passed to [fromJson] and
-  /// persisted under the current [version]. Handle every intermediate step
-  /// (e.g. with a `switch` that falls through) when jumping multiple versions.
+  /// persisted under the current [version]. When jumping multiple versions,
+  /// apply every intermediate step in order with stacked `if (oldVersion < N)`
+  /// blocks (Dart `switch` cases do not fall through, so a `switch` would skip
+  /// the intermediate upgrades).
   ///
   /// The default implementation returns [oldState] unchanged.
   ///
@@ -439,6 +490,10 @@ abstract class HydratedMobX with Store {
     _persistDisposer?.call();
     _persistDisposer = null;
     await __storage.delete(storageToken);
+    // Delete the paired version key so a later re-seed/import is not skipped by
+    // stale version metadata, and so resumed writes re-stamp the version.
+    await __storage.delete(_versionToken);
+    _lastStampedVersion = null;
     if (resume) _startPersisting();
   }
 
@@ -454,6 +509,9 @@ abstract class HydratedMobX with Store {
   /// simply dropped without calling [dispose] are still pruned lazily once the
   /// garbage collector reclaims them, but calling [dispose] is preferred: it
   /// releases the reaction immediately rather than waiting for collection.
+  ///
+  /// This releases only the persistence reaction; it does not tear down the
+  /// store's own MobX observables/actions, which remain usable afterwards.
   void dispose() {
     _persistDisposer?.call();
     _persistDisposer = null;

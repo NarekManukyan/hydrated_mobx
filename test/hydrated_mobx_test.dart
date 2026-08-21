@@ -102,8 +102,7 @@ class PrefixedStore extends HydratedMobX with Store {
 class CorruptStore extends HydratedMobX with Store {
   CorruptStore({OnHydrationError? onHydrationError})
       : super(
-          onHydrationError:
-              onHydrationError ?? defaultOnHydrationError,
+          onHydrationError: onHydrationError ?? defaultOnHydrationError,
         );
 
   final Observable<int> _value = Observable(0, name: 'CorruptStore.value');
@@ -409,8 +408,7 @@ void main() {
       expect(
         HydratedMobX.storage.read(store.storageToken),
         isNull,
-        reason:
-            'cleared key must not be re-written by the persistence autorun',
+        reason: 'cleared key must not be re-written by the persistence autorun',
       );
     });
 
@@ -760,7 +758,9 @@ void main() {
   group('HydratedJson – readObject', () {
     test('returns parsed object for valid map value', () {
       final result = HydratedJson.readObject(
-        {'obj': <String, dynamic>{'x': 10}},
+        {
+          'obj': <String, dynamic>{'x': 10},
+        },
         'obj',
         (m) => m['x'] as int,
       );
@@ -849,10 +849,12 @@ void main() {
       await storage.write('VersionedStore', {'counter': 5});
 
       final store = VersionedStore();
+      await _settle();
 
       // migrate() renamed 'counter' -> 'count'.
       expect(store.count, 5);
-      // Schema version is recorded so migration does not run again.
+      // Schema version is recorded (by the persistence reaction, after the
+      // state write) so migration does not run again.
       expect(storage.read('VersionedStore.__version'), 2);
     });
 
@@ -891,8 +893,30 @@ void main() {
     test('migrate is not invoked when there is no persisted state', () async {
       final store = VersionedStore();
 
+      // Nothing to migrate: state starts at the Dart default.
       expect(store.count, 0);
-      expect(storage.read('VersionedStore.__version'), isNull);
+    });
+
+    test(
+        'a fresh version>1 store stamps its version and does not re-migrate '
+        'on the next launch', () async {
+      // First launch: empty storage, store ships at version 2.
+      final first = VersionedStore();
+      first.increment();
+      first.increment();
+      await _settle();
+
+      // State persisted in the v2 shape, tagged with version 2 — not left
+      // unversioned (which would make the next launch re-migrate).
+      expect(storage.read('VersionedStore'), {'count': 2});
+      expect(storage.read('VersionedStore.__version'), 2);
+
+      // Second launch on the same storage: migrate must NOT run against the
+      // already-current data, so the value survives.
+      final second = VersionedStore();
+      await _settle();
+      expect(second.count, 2);
+      expect(storage.read('VersionedStore'), {'count': 2});
     });
   });
 
@@ -936,6 +960,26 @@ void main() {
       );
 
       expect(storage.read('CounterStore'), {'count': 99});
+    });
+
+    test('imports current-shape data for a versioned store without migrating',
+        () async {
+      // Seed already-v2 data and declare its version, so the store must NOT
+      // run its version-1 migration against it.
+      await HydratedMobX.importData(
+        {
+          'VersionedStore': {'count': 42},
+        },
+        version: 2,
+      );
+      expect(storage.read('VersionedStore.__version'), 2);
+
+      final store = VersionedStore();
+      await _settle();
+
+      // migrate() would have blown 'count' away (it removes 'counter'); it did
+      // not run, so the imported value survives.
+      expect(store.count, 42);
     });
   });
 
@@ -1001,6 +1045,21 @@ void main() {
       await _settle();
 
       expect(mem.read(store.storageToken), isNull);
+    });
+
+    test('clear() also deletes the paired version key', () async {
+      final mem = _MemoryStorage();
+      HydratedMobX.storage = mem;
+
+      final store = VersionedStore();
+      store.increment();
+      await _settle();
+      expect(mem.read('VersionedStore.__version'), 2);
+
+      await store.clear();
+
+      expect(mem.read('VersionedStore'), isNull);
+      expect(mem.read('VersionedStore.__version'), isNull);
     });
   });
 
@@ -1068,6 +1127,8 @@ class VersionedStore extends HydratedMobX with Store {
   VersionedStore() : super();
 
   final Observable<int> _count = Observable(0, name: 'VersionedStore.count');
+  late final Action increment =
+      Action(() => _count.value++, name: 'VersionedStore.increment');
 
   int get count => _count.value;
 
