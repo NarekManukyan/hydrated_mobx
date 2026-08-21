@@ -64,8 +64,10 @@ class CounterStore extends HydratedMobX with Store {
   CounterStore({super.storeId});
 
   final Observable<int> _count = Observable(0, name: 'CounterStore.count');
-  late final Action increment =
-      Action(() => _count.value++, name: 'CounterStore.increment');
+  late final Action increment = Action(
+    () => _count.value++,
+    name: 'CounterStore.increment',
+  );
 
   int get count => _count.value;
 
@@ -101,9 +103,7 @@ class PrefixedStore extends HydratedMobX with Store {
 /// Store whose fromJson always throws — exercises hydration-error paths.
 class CorruptStore extends HydratedMobX with Store {
   CorruptStore({OnHydrationError? onHydrationError})
-      : super(
-          onHydrationError: onHydrationError ?? defaultOnHydrationError,
-        );
+      : super(onHydrationError: onHydrationError ?? defaultOnHydrationError);
 
   final Observable<int> _value = Observable(0, name: 'CorruptStore.value');
 
@@ -124,8 +124,10 @@ class NullJsonStore extends HydratedMobX with Store {
   NullJsonStore() : super();
 
   final Observable<int> _count = Observable(0, name: 'NullJsonStore.count');
-  late final Action increment =
-      Action(() => _count.value++, name: 'NullJsonStore.increment');
+  late final Action increment = Action(
+    () => _count.value++,
+    name: 'NullJsonStore.increment',
+  );
 
   int get count => _count.value;
 
@@ -142,8 +144,10 @@ class NullJsonStore extends HydratedMobX with Store {
 class NestedStore extends HydratedMobX with Store {
   NestedStore() : super();
 
-  final Observable<Map<String, dynamic>> _data =
-      Observable(<String, dynamic>{}, name: 'NestedStore.data');
+  final Observable<Map<String, dynamic>> _data = Observable(
+    <String, dynamic>{},
+    name: 'NestedStore.data',
+  );
 
   Map<String, dynamic> get data => _data.value;
 
@@ -169,8 +173,10 @@ class Inner {
 class CustomObjectStore extends HydratedMobX with Store {
   CustomObjectStore() : super();
 
-  final Observable<Inner> _inner =
-      Observable(Inner(0), name: 'CustomObjectStore.inner');
+  final Observable<Inner> _inner = Observable(
+    Inner(0),
+    name: 'CustomObjectStore.inner',
+  );
 
   Inner get inner => _inner.value;
   set inner(Inner v) => runInAction(() => _inner.value = v);
@@ -319,32 +325,28 @@ void main() {
       expect(store.storageToken, equals('my_prefix_'));
     });
 
-    test('multiple instances with distinct storeIds use independent keys',
-        () async {
-      final mem = _MemoryStorage();
-      HydratedMobX.storage = mem;
+    test(
+      'multiple instances with distinct storeIds use independent keys',
+      () async {
+        final mem = _MemoryStorage();
+        HydratedMobX.storage = mem;
 
-      final a = CounterStore(storeId: 'a');
-      final b = CounterStore(storeId: 'b');
+        final a = CounterStore(storeId: 'a');
+        final b = CounterStore(storeId: 'b');
 
-      // Trigger observables through the store's own Action.
-      for (var i = 0; i < 10; i++) {
-        a.increment();
-      }
-      for (var i = 0; i < 20; i++) {
-        b.increment();
-      }
-      await _settle();
+        // Trigger observables through the store's own Action.
+        for (var i = 0; i < 10; i++) {
+          a.increment();
+        }
+        for (var i = 0; i < 20; i++) {
+          b.increment();
+        }
+        await _settle();
 
-      expect(
-        (mem.read('CounterStorea') as Map)['count'],
-        equals(10),
-      );
-      expect(
-        (mem.read('CounterStoreb') as Map)['count'],
-        equals(20),
-      );
-    });
+        expect((mem.read('CounterStorea') as Map)['count'], equals(10));
+        expect((mem.read('CounterStoreb') as Map)['count'], equals(20));
+      },
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -389,28 +391,31 @@ void main() {
 
   // -------------------------------------------------------------------------
   group('store.clear()', () {
-    test('removes the persisted key and survives subsequent mutations',
-        () async {
-      final store = CounterStore();
-      store.increment();
-      store.increment();
-      await _settle();
+    test(
+      'removes the persisted key and survives subsequent mutations',
+      () async {
+        final store = CounterStore();
+        store.increment();
+        store.increment();
+        await _settle();
 
-      expect(HydratedMobX.storage.read(store.storageToken), isNotNull);
+        expect(HydratedMobX.storage.read(store.storageToken), isNotNull);
 
-      await store.clear();
-      expect(HydratedMobX.storage.read(store.storageToken), isNull);
+        await store.clear();
+        expect(HydratedMobX.storage.read(store.storageToken), isNull);
 
-      // Mutate again — the autorun must NOT resurrect the cleared key.
-      store.increment();
-      await _settle();
+        // Mutate again — the autorun must NOT resurrect the cleared key.
+        store.increment();
+        await _settle();
 
-      expect(
-        HydratedMobX.storage.read(store.storageToken),
-        isNull,
-        reason: 'cleared key must not be re-written by the persistence autorun',
-      );
-    });
+        expect(
+          HydratedMobX.storage.read(store.storageToken),
+          isNull,
+          reason:
+              'cleared key must not be re-written by the persistence autorun',
+        );
+      },
+    );
 
     test('write queued before clear is dropped', () async {
       final store = CounterStore();
@@ -425,27 +430,29 @@ void main() {
 
   // -------------------------------------------------------------------------
   group('HydratedStorage.clear()', () {
-    test('wipes the box and prevents any live store from re-persisting',
-        () async {
-      final a = CounterStore(storeId: 'a');
-      final b = CounterStore(storeId: 'b');
-      a.increment();
-      b.increment();
-      await _settle();
+    test(
+      'wipes the box and prevents any live store from re-persisting',
+      () async {
+        final a = CounterStore(storeId: 'a');
+        final b = CounterStore(storeId: 'b');
+        a.increment();
+        b.increment();
+        await _settle();
 
-      expect(HydratedMobX.storage.read(a.storageToken), isNotNull);
-      expect(HydratedMobX.storage.read(b.storageToken), isNotNull);
+        expect(HydratedMobX.storage.read(a.storageToken), isNotNull);
+        expect(HydratedMobX.storage.read(b.storageToken), isNotNull);
 
-      await HydratedMobX.storage.clear();
+        await HydratedMobX.storage.clear();
 
-      // Mutate both stores after the global clear.
-      a.increment();
-      b.increment();
-      await _settle();
+        // Mutate both stores after the global clear.
+        a.increment();
+        b.increment();
+        await _settle();
 
-      expect(HydratedMobX.storage.read(a.storageToken), isNull);
-      expect(HydratedMobX.storage.read(b.storageToken), isNull);
-    });
+        expect(HydratedMobX.storage.read(a.storageToken), isNull);
+        expect(HydratedMobX.storage.read(b.storageToken), isNull);
+      },
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -574,8 +581,9 @@ void main() {
       await HydratedMobX.storage.close();
 
       final cipher = HydratedAesCipher(_makeKey('test_password'));
-      final encDir =
-          await Directory.systemTemp.createTemp('hydrated_enc_test_');
+      final encDir = await Directory.systemTemp.createTemp(
+        'hydrated_enc_test_',
+      );
       try {
         final encStorage = await HydratedStorage.build(
           storageDirectory: HydratedStorageDirectory(encDir.path),
@@ -652,10 +660,7 @@ void main() {
   // -------------------------------------------------------------------------
   group('HydratedJson – readDouble', () {
     test('returns double value', () {
-      expect(
-        HydratedJson.readDouble({'d': 3.14}, 'd'),
-        closeTo(3.14, 0.001),
-      );
+      expect(HydratedJson.readDouble({'d': 3.14}, 'd'), closeTo(3.14, 0.001));
     });
 
     test('coerces int to double', () {
@@ -664,10 +669,7 @@ void main() {
 
     test('returns defaultValue for missing key', () {
       expect(HydratedJson.readDouble({}, 'd'), equals(0.0));
-      expect(
-        HydratedJson.readDouble({}, 'd', defaultValue: 1.5),
-        equals(1.5),
-      );
+      expect(HydratedJson.readDouble({}, 'd', defaultValue: 1.5), equals(1.5));
     });
 
     test('returns defaultValue for null', () {
@@ -772,10 +774,7 @@ void main() {
     });
 
     test('returns null for null value', () {
-      expect(
-        HydratedJson.readObject({'obj': null}, 'obj', (m) => m),
-        isNull,
-      );
+      expect(HydratedJson.readObject({'obj': null}, 'obj', (m) => m), isNull);
     });
 
     test('returns null for non-Map value', () {
@@ -800,10 +799,7 @@ void main() {
   // -------------------------------------------------------------------------
   group('HydratedJson – writeList', () {
     test('serialises list via toJson callback', () {
-      final result = HydratedJson.writeList(
-        [1, 2, 3],
-        (e) => {'v': e},
-      );
+      final result = HydratedJson.writeList([1, 2, 3], (e) => {'v': e});
       expect(
         result,
         equals([
@@ -879,16 +875,18 @@ void main() {
       expect(store.count, 3);
     });
 
-    test('treats missing version as 1 and does not migrate a v1 store',
-        () async {
-      await storage.write('CounterStore', {'count': 9});
+    test(
+      'treats missing version as 1 and does not migrate a v1 store',
+      () async {
+        await storage.write('CounterStore', {'count': 9});
 
-      final store = CounterStore();
+        final store = CounterStore();
 
-      expect(store.count, 9);
-      // A default (version == 1) store never writes a version key.
-      expect(storage.read('CounterStore.__version'), isNull);
-    });
+        expect(store.count, 9);
+        // A default (version == 1) store never writes a version key.
+        expect(storage.read('CounterStore.__version'), isNull);
+      },
+    );
 
     test('migrate is not invoked when there is no persisted state', () async {
       final store = VersionedStore();
@@ -1030,22 +1028,24 @@ void main() {
       );
     });
 
-    test('default clear() still stops persisting (unchanged behavior)',
-        () async {
-      final mem = _MemoryStorage();
-      HydratedMobX.storage = mem;
+    test(
+      'default clear() still stops persisting (unchanged behavior)',
+      () async {
+        final mem = _MemoryStorage();
+        HydratedMobX.storage = mem;
 
-      final store = CounterStore();
-      addTearDown(store.dispose);
-      store.increment();
-      await _settle();
+        final store = CounterStore();
+        addTearDown(store.dispose);
+        store.increment();
+        await _settle();
 
-      await store.clear();
-      store.increment();
-      await _settle();
+        await store.clear();
+        store.increment();
+        await _settle();
 
-      expect(mem.read(store.storageToken), isNull);
-    });
+        expect(mem.read(store.storageToken), isNull);
+      },
+    );
 
     test('clear() also deletes the paired version key', () async {
       final mem = _MemoryStorage();
@@ -1121,27 +1121,29 @@ void main() {
 
   // -------------------------------------------------------------------------
   group('re-hydrate', () {
-    test('calling hydrate() again does not leave a duplicate reaction',
-        () async {
-      final storage = _CountingStorage();
-      HydratedMobX.storage = storage;
+    test(
+      'calling hydrate() again does not leave a duplicate reaction',
+      () async {
+        final storage = _CountingStorage();
+        HydratedMobX.storage = storage;
 
-      final store = CounterStore();
-      await _settle();
+        final store = CounterStore();
+        await _settle();
 
-      // Re-arm; the previous reaction must be disposed, not duplicated.
-      store.hydrate();
-      storage.writes.clear();
+        // Re-arm; the previous reaction must be disposed, not duplicated.
+        store.hydrate();
+        storage.writes.clear();
 
-      store.increment();
-      await _settle();
+        store.increment();
+        await _settle();
 
-      expect(
-        storage.writes.where((key) => key == store.storageToken).length,
-        1,
-        reason: 'a single mutation must trigger exactly one write',
-      );
-    });
+        expect(
+          storage.writes.where((key) => key == store.storageToken).length,
+          1,
+          reason: 'a single mutation must trigger exactly one write',
+        );
+      },
+    );
   });
 }
 
@@ -1151,8 +1153,10 @@ class VersionedStore extends HydratedMobX with Store {
   VersionedStore() : super();
 
   final Observable<int> _count = Observable(0, name: 'VersionedStore.count');
-  late final Action increment =
-      Action(() => _count.value++, name: 'VersionedStore.increment');
+  late final Action increment = Action(
+    () => _count.value++,
+    name: 'VersionedStore.increment',
+  );
 
   int get count => _count.value;
 
@@ -1227,8 +1231,10 @@ class _FailingStorage implements Storage {
 class ErrorReportingStore extends HydratedMobX with Store {
   ErrorReportingStore({super.onStorageError});
 
-  final Observable<int> _count =
-      Observable(0, name: 'ErrorReportingStore.count');
+  final Observable<int> _count = Observable(
+    0,
+    name: 'ErrorReportingStore.count',
+  );
 
   @override
   Map<String, dynamic>? toJson() => {'count': _count.value};

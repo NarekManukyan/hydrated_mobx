@@ -63,10 +63,7 @@ abstract class HydratedMobX with Store {
     OnHydrationError onHydrationError = defaultOnHydrationError,
     OnStorageError onStorageError = defaultOnStorageError,
   }) : _constructorStorageId = storeId {
-    hydrate(
-      onHydrationError: onHydrationError,
-      onStorageError: onStorageError,
-    );
+    hydrate(onHydrationError: onHydrationError, onStorageError: onStorageError);
   }
 
   final String? _constructorStorageId;
@@ -281,13 +278,17 @@ abstract class HydratedMobX with Store {
         // re-runs migration next launch) rather than ahead of it (which would
         // skip a required migration and corrupt data).
         stateWrite.then((_) {
-          // Re-check the clear generation: a clear() may have run (and deleted
-          // the version key) while this continuation was pending. Without this
-          // guard the version write would resurrect the key clear() removed.
+          // A clear() may have run (bumping the generation and deleting the
+          // version key) while this continuation was pending. Skip the
+          // version write so it does not resurrect the deleted key.
           if (myGeneration != _clearGeneration) return null;
           return __storage.write(_versionToken, version).then((_) {
-            // Flip the flag only after the write resolves, so a failed version
-            // write is retried by the next state change.
+            // Re-check for the same reason: a clear() during this write
+            // already reset _lastStampedVersion, so flipping it back would
+            // suppress the re-stamp the resumed reaction owes the key.
+            // Flipping only after the write resolves also lets a failed
+            // version write be retried by the next state change.
+            if (myGeneration != _clearGeneration) return;
             _lastStampedVersion = version;
           });
         }).catchError(_onStorageError);
@@ -484,10 +485,7 @@ abstract class HydratedMobX with Store {
   ///   return old;
   /// }
   /// ```
-  Map<String, dynamic> migrate(
-    int oldVersion,
-    Map<String, dynamic> oldState,
-  ) =>
+  Map<String, dynamic> migrate(int oldVersion, Map<String, dynamic> oldState) =>
       oldState;
 
   /// [clear] is used to wipe or invalidate the cache of a store.
@@ -597,10 +595,7 @@ class StorageNotFound implements Exception {
 class HydratedUnsupportedError extends Error {
   /// The object that failed to be serialized.
   /// Error of attempt to serialize through `toJson` method.
-  HydratedUnsupportedError(
-    this.unsupportedObject, {
-    this.cause,
-  });
+  HydratedUnsupportedError(this.unsupportedObject, {this.cause});
 
   /// The object that could not be serialized.
   final Object? unsupportedObject;
@@ -661,10 +656,7 @@ HydrationErrorBehavior defaultOnHydrationError(
 /// Persistence is fire-and-forget, so a failing write never interrupts the
 /// store; this callback is the only way to observe such failures (e.g. to
 /// report them to a crash reporter).
-typedef OnStorageError = void Function(
-  Object error,
-  StackTrace stackTrace,
-);
+typedef OnStorageError = void Function(Object error, StackTrace stackTrace);
 
 /// Default [OnStorageError] handler. Logs the error via `dart:developer`.
 void defaultOnStorageError(Object error, StackTrace stackTrace) {
