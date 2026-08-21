@@ -1,5 +1,57 @@
 # Changelog
 
+## [1.2.0] - 2026-08-21
+
+### Added
+
+- **Schema versioning + `migrate` hook.** `HydratedMobX` now exposes an
+  overridable `int get version` (default `1`) and
+  `Map<String, dynamic> migrate(int oldVersion, Map<String, dynamic> oldState)`
+  (default: identity). When a store hydrates data written under a lower version,
+  `migrate` is invoked to upgrade it, the result is passed to `fromJson`, and the
+  new schema version is recorded so migration runs only once. Data written before
+  this release has no version key and is treated as version 1. Resolves #1.
+- **`HydratedMobX.importData(...)`** — a static helper to seed hydrated storage
+  with data imported from another persistence layer (e.g. `SharedPreferences`, a
+  legacy Hive box, or a previous key scheme) before constructing stores. Existing
+  keys are preserved by default; pass `overwrite: true` to replace them.
+- **`OnStorageError` callback.** `HydratedMobX` now accepts an `onStorageError`
+  handler (constructor and `hydrate`) invoked when persisting a state change
+  fails. Persistence is fire-and-forget, so this is the only way to observe such
+  failures (e.g. to forward them to a crash reporter). Defaults to
+  `defaultOnStorageError`, which preserves the previous log-only behavior.
+- **`dispose()`** — permanently stops a store from persisting and removes it
+  from the internal instance registry so it can be garbage collected. Call it
+  when a store is no longer used (the on-disk state is left untouched).
+- The internal instance registry now holds `WeakReference`s and prunes entries
+  via a `Finalizer`, so stores no longer leak once their persistence reaction is
+  released (via `clear()`, `dispose()`, or a `Storage`-level clear) and the app
+  drops them — even without an explicit `dispose()`. Calling `dispose()` is
+  still preferred to release the reaction immediately.
+- **`clear({bool resume = false})`** — `clear` now takes an optional `resume`
+  flag. `resume: true` keeps persisting after the wipe (subsequent changes are
+  saved again), matching `hydrated_bloc`. The default (`false`) preserves the
+  existing behavior of stopping persistence after a clear.
+- Expanded the test suite to cover schema migration, `importData`,
+  `onStorageError`, `dispose`, `clear(resume: true)`, and re-`hydrate`.
+
+### Changed
+
+- Raised the minimum Dart SDK from `2.14.0` to `3.0.0`.
+- Documented why `HydratedStorage.read` is intentionally not lock-guarded (it is
+  a synchronous in-memory lookup that cannot interleave with mutating ops on
+  Dart's single-threaded event loop), and why the `hive_ce/src/hive_impl.dart`
+  implementation import is unavoidable (no public `HiveImpl`).
+
+- Added `topics` to `pubspec.yaml` (`mobx`, `state-management`, `persistence`,
+  `storage`, `hydration`) for pub.dev discoverability, and the example now
+  disposes its stores from `State.dispose` to model the recommended lifecycle.
+
+### Fixed
+
+- Calling `hydrate()` more than once no longer leaks the previous persistence
+  reaction or double-writes: the prior reaction is disposed before re-arming.
+
 ## [1.1.4] - 2026-04-08
 
 ### Added

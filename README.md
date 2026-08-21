@@ -23,6 +23,8 @@ A Flutter package that automatically persists and restores MobX stores. Built to
 - Supports encryption for secure storage
 - Works on all platforms (iOS, Android, Web, Linux, macOS, Windows)
 - Built on top of Hive for fast and efficient storage
+- Schema versioning with a `migrate` hook for evolving persisted state
+- Import existing data from another persistence layer via `importData`
 - Simple and intuitive API
 
 ## Getting started
@@ -31,7 +33,7 @@ Add the package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  hydrated_mobx: ^1.1.3
+  hydrated_mobx: ^1.2.0
 ```
 
 ## Usage
@@ -131,6 +133,139 @@ Map<String, dynamic> toJson() => {
 ```
 
 Available helpers: `readList`, `readObject`, `readString`, `readInt`, `readDouble`, `readBool`, `writeList`. They return safe defaults (e.g. empty list, 0, null) when the key is missing or the value has the wrong type.
+
+### Migrating persisted state across schema changes
+
+When the shape of your persisted state changes between app releases, bump
+`version` and implement `migrate` to upgrade older data. `migrate` is called
+during hydration whenever the stored version is lower than the current one; its
+result is passed to `fromJson` and re-persisted under the new version, so it runs
+only once per upgrade. Data written before versioning existed is treated as
+version `1`.
+
+```dart
+class CounterStore extends HydratedMobX with Store {
+  CounterStore() { hydrate(); }
+
+  final Observable<int> _count = Observable(0);
+  int get count => _count.value;
+
+  @override
+  int get version => 2;
+
+  @override
+  Map<String, dynamic> migrate(int oldVersion, Map<String, dynamic> old) {
+    if (oldVersion < 2) {
+      // v1 stored the value under 'counter'; v2 renamed it to 'count'.
+      old['count'] = old.remove('counter') ?? 0;
+    }
+    return old;
+  }
+
+  @override
+  Map<String, dynamic>? toJson() => {'count': _count.value};
+
+  @override
+  void fromJson(Map<String, dynamic> json) =>
+      _count.value = (json['count'] as int?) ?? 0;
+}
+```
+
+When jumping multiple versions at once, handle every intermediate step inside
+`migrate` (for example a `switch` with fall-through on `oldVersion`).
+
+### Importing existing data
+
+To bring data in from another persistence layer — `SharedPreferences`, a legacy
+Hive box, or a previous key scheme — seed the storage with
+`HydratedMobX.importData` after storage is set and before you construct the
+stores that should pick it up. Keys map to each store's `storageToken`
+(`'$storagePrefix$id'`). Existing keys are left untouched by default; pass
+`overwrite: true` to replace them.
+
+```dart
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  HydratedMobX.storage = await HydratedStorage.build(
+    storageDirectory: HydratedStorageDirectory(
+      (await getTemporaryDirectory()).path,
+    ),
+  );
+
+  final prefs = await SharedPreferences.getInstance();
+  await HydratedMobX.importData({
+    'CounterStore': {'count': prefs.getInt('count') ?? 0},
+  });
+
+  final store = CounterStore(); // hydrates from the imported data
+  runApp(App());
+}
+```
+
+### Observing persistence failures
+
+State is persisted in the background (fire-and-forget), so a failing write never
+interrupts your store. To observe such failures — a full disk, an encryption
+error — pass an `onStorageError` handler. It defaults to logging the error.
+
+```dart
+class CounterStore extends HydratedMobX with Store {
+  CounterStore()
+      : super(
+          onStorageError: (error, stackTrace) {
+            FirebaseCrashlytics.instance.recordError(error, stackTrace);
+          },
+        ) {
+    hydrate();
+  }
+  // ...
+}
+```
+
+> **Note on multiple instances:** the default storage key is derived from the
+> store's `runtimeType`, so two live instances of the same store type share one
+> key and overwrite each other. If you intentionally keep several instances of
+> the same type, override `id` (or pass `storeId`) to give each a distinct key.
+
+### Clearing, resuming, and disposing
+
+- `clear()` deletes the store's cached state and, by default, **stops**
+  persisting further changes.
+- `clear(resume: true)` deletes the cached state but keeps persisting, so
+  subsequent changes are saved again.
+- `dispose()` permanently stops persistence and removes the store from the
+  internal registry so it can be garbage collected. Call it when the store is
+  no longer used (e.g. from the owning widget's `dispose`); the on-disk state is
+  left untouched.
+
+```dart
+await store.clear();              // wipe cache, stop persisting
+await store.clear(resume: true);  // wipe cache, keep persisting
+store.dispose();                  // stop persisting for good, keep stored data
+```
+
+**Call `dispose()` when a store is scoped to a widget.** A persisting store is
+kept alive by its internal MobX reaction (this is how it observes changes), so a
+store you simply drop is not garbage-collected until that reaction is released.
+Calling `dispose()` releases it immediately. For a store owned by a `State`,
+dispose it from the widget's `dispose`:
+
+```dart
+class _MyPageState extends State<MyPage> {
+  final store = CounterStore();
+
+  @override
+  void dispose() {
+    store.dispose();
+    super.dispose();
+  }
+
+  // ...
+}
+```
+
+Long-lived, app-wide singleton stores don't need this — they live for the
+whole session by design.
 
 ## Additional information
 
