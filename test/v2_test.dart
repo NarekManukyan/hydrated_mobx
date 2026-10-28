@@ -841,6 +841,38 @@ void main() {
 
       expect(() => disk.evict(maxEntries: -1), throwsArgumentError);
     });
+
+    test('a box name ending in the use-time suffix is rejected', () {
+      expect(
+        () => HydratedStorage.build(
+          storageDirectory: const HydratedStorageDirectory('unused'),
+          boxName: 'cache__meta',
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('evict() sees a use time markUsed queued just before it', () async {
+      final dir = await Directory.systemTemp.createTemp('hydrated_v2_');
+      addTearDown(() => dir.delete(recursive: true));
+      var now = DateTime(2026);
+      final disk = await HydratedStorage.build(
+        storageDirectory: HydratedStorageDirectory(dir.path),
+        trackUse: true,
+        clock: () => now,
+      );
+      addTearDown(disk.close);
+      await disk.write('k', 1);
+      now = now.add(const Duration(days: 2));
+
+      // A write holds the lock, so the use time queues behind it.
+      final busy = disk.write('other', 2);
+      disk.markUsed('k');
+      await disk.evict(olderThan: const Duration(days: 1));
+      await busy;
+
+      expect(disk.read('k'), 1);
+    });
   });
 
   group('untracked side effects', () {

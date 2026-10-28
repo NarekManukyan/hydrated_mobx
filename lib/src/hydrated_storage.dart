@@ -195,7 +195,8 @@ class HydratedStorage implements UseTrackingStorage {
   ///   a companion box and cost a small write when a key is used again after
   ///   [useResolution]; storages that never evict skip all of it. Keep the
   ///   setting the same across launches: keys written while it was off look
-  ///   as old as their last recorded use.
+  ///   as old as their last recorded use. A use time can lag the real use by
+  ///   up to [useResolution], so keep it well below [maxAge].
   /// - [compactionStrategy] overrides when Hive rewrites the box file.
   static Future<HydratedStorage> build({
     required HydratedStorageDirectory storageDirectory,
@@ -209,6 +210,13 @@ class HydratedStorage implements UseTrackingStorage {
     HydratedCompactionStrategy? compactionStrategy,
     @visibleForTesting DateTime Function() clock = DateTime.now,
   }) {
+    if (boxName.endsWith(_metaBoxSuffix)) {
+      throw ArgumentError.value(
+        boxName,
+        'boxName',
+        'must not end with "$_metaBoxSuffix", which names use-time boxes',
+      );
+    }
     final lock = _buildLocks.putIfAbsent(
       '${storageDirectory.path}/$boxName',
       Lock.new,
@@ -225,23 +233,30 @@ class HydratedStorage implements UseTrackingStorage {
             compactionStrategy: strategy,
           );
       final tracks = trackUse || maxAge != null || maxEntries != null;
-      final boxes = await Future.wait([
-        open(boxName),
-        if (tracks) open('$boxName$_metaBoxSuffix'),
-      ]);
+      // A failed build closes what it opened, so the next build can open the
+      // box files again.
+      final boxes = await Future.wait(
+        [open(boxName), if (tracks) open('$boxName$_metaBoxSuffix')],
+        cleanUp: (box) => unawaited(box.close()),
+      );
       final storage = HydratedStorage._(
         boxes.first,
         tracks ? boxes.last : null,
         clock: clock,
         useResolution: useResolution,
       );
-      await storage._stampUntracked();
-      if (maxAge != null || maxEntries != null) {
-        await storage.evict(
-          olderThan: maxAge,
-          maxEntries: maxEntries,
-          where: evictable,
-        );
+      try {
+        await storage._stampUntracked();
+        if (maxAge != null || maxEntries != null) {
+          await storage.evict(
+            olderThan: maxAge,
+            maxEntries: maxEntries,
+            where: evictable,
+          );
+        }
+      } catch (_) {
+        await storage.close();
+        rethrow;
       }
       return storage;
     });
@@ -364,9 +379,14 @@ class HydratedStorage implements UseTrackingStorage {
     if (maxEntries != null && maxEntries < 0) {
       throw ArgumentError.value(maxEntries, 'maxEntries', 'must be >= 0');
     }
-    _checkOpen('evict');
     final meta = _meta;
-    if (meta == null) return;
+    if (meta == null) {
+      _checkOpen('evict');
+      return;
+    }
+    // Let use times already queued by [markUsed] land first, or a key used
+    // just now could be judged by its previous use time.
+    await _locked('evict', () async {});
     final now = _clock().millisecondsSinceEpoch;
     final candidates = [
       for (final key in keys)

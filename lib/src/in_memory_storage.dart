@@ -58,5 +58,8 @@ class InMemoryStorage implements Storage {
   }
 
   @override
-  Future<void> close() async => _closed = true;
+  Future<void> close() async {
+    _data.clear();
+    _closed = true;
+  }
 }
