@@ -9,31 +9,115 @@ import 'package:hive_ce/hive.dart';
 // single major (`hive_ce: ^2`) to bound exposure to internal changes.
 // ignore: implementation_imports
 import 'package:hive_ce/src/hive_impl.dart';
-import 'package:hydrated_mobx/src/_migration/_migration_stub.dart'
-    if (dart.library.io) 'package:hydrated_mobx/src/_migration/_migration_io.dart';
 import 'package:hydrated_mobx/src/hydrated_cipher.dart';
 import 'package:hydrated_mobx/src/hydrated_mobx.dart';
 import 'package:meta/meta.dart';
 import 'package:synchronized/synchronized.dart';
 
 /// Interface which is used to persist and retrieve state changes.
+///
+/// Implementations must call [HydratedMobX.suspendAll] with themselves from
+/// [clear] before wiping, so no live store writes its state back afterwards.
 abstract class Storage {
-  /// Returns value for key
+  /// Returns the value for [key], or `null` when there is none.
   dynamic read(String key);
 
-  /// Persists key value pair
+  /// Persists the [key]/[value] pair.
   Future<void> write(String key, dynamic value);
 
-  /// Deletes key value pair
+  /// Deletes the value for [key].
   Future<void> delete(String key);
 
-  /// Clears all key value pairs from storage
+  /// Deletes the values for every key in [keys] in one operation.
+  Future<void> deleteAll(Iterable<String> keys);
+
+  /// Every key currently stored, including the `.__version` keys
+  /// [HydratedMobX] keeps beside versioned state
+  /// (see [HydratedMobX.versionKeySuffix]).
+  Iterable<String> get keys;
+
+  /// Clears all key value pairs from storage.
   Future<void> clear();
 
-  /// Close the storage instance which will free any allocated resources.
+  /// Closes the storage instance, freeing any allocated resources.
   /// A storage instance can no longer be used once it is closed.
   Future<void> close();
 }
+
+/// A [Storage] that records when each key was last used, for eviction.
+///
+/// [HydratedMobX] calls [markUsed] when a store hydrates from a key. A plain
+/// [Storage.read] does not count as use, so tools that only display stored
+/// values (inspectors, debug screens) do not keep keys from being evicted.
+abstract class UseTrackingStorage implements Storage {
+  /// Records that [key] was used now.
+  void markUsed(String key);
+}
+
+/// {@template forwarding_storage}
+/// A [Storage] that forwards every call to [inner]; extend it to wrap a
+/// storage (to count, log or delay writes) and override what you need.
+///
+/// Stores bind to the wrapper, not to [inner], so [clear] suspends the
+/// wrapper's stores before clearing [inner].
+/// {@endtemplate}
+class ForwardingStorage implements UseTrackingStorage {
+  /// {@macro forwarding_storage}
+  ForwardingStorage(this.inner);
+
+  /// The storage every call is forwarded to.
+  final Storage inner;
+
+  @override
+  dynamic read(String key) => inner.read(key);
+
+  @override
+  Future<void> write(String key, dynamic value) => inner.write(key, value);
+
+  @override
+  Future<void> delete(String key) => inner.delete(key);
+
+  @override
+  Future<void> deleteAll(Iterable<String> keys) => inner.deleteAll(keys);
+
+  @override
+  Iterable<String> get keys => inner.keys;
+
+  @override
+  void markUsed(String key) {
+    final target = inner;
+    if (target is UseTrackingStorage) target.markUsed(key);
+  }
+
+  @override
+  Future<void> clear() {
+    HydratedMobX.suspendAll(storage: this);
+    return inner.clear();
+  }
+
+  @override
+  Future<void> close() => inner.close();
+}
+
+/// Thrown when a [Storage] is used after [Storage.close].
+class StorageClosedException implements Exception {
+  /// Creates the exception for the operation that found storage closed.
+  const StorageClosedException(this.operation);
+
+  /// The operation attempted on the closed storage (`read`, `write`, ...).
+  final String operation;
+
+  @override
+  String toString() =>
+      'StorageClosedException: cannot $operation, the storage is closed.';
+}
+
+/// Decides when Hive compacts a box file, given its live [entries] and the
+/// [deletedEntries] (overwritten or deleted frames) still in the file.
+typedef HydratedCompactionStrategy = bool Function(
+  int entries,
+  int deletedEntries,
+);
 
 /// {@template hydrated_storage_directory}
 /// A platform-agnostic storage directory representation.
@@ -59,121 +143,281 @@ class HydratedStorageDirectory {
 /// {@template hydrated_storage}
 /// Implementation of [Storage] which uses [package:hive_ce](https://pub.dev/packages/hive_ce)
 /// to persist and retrieve state changes from the local device.
+///
+/// Each instance owns one Hive box, named by `boxName`. Build one per
+/// namespace (e.g. a session box and an account box) and pass it to the
+/// stores that belong there via `HydratedMobX(storage: ...)`; clearing one
+/// namespace then never touches the other.
 /// {@endtemplate}
-class HydratedStorage implements Storage {
-  /// {@macro hydrated_storage}
+class HydratedStorage implements UseTrackingStorage {
+  /// Wraps an already-open [box] without eviction metadata.
   @visibleForTesting
-  HydratedStorage(this._box);
+  HydratedStorage(Box<dynamic> box) : this._(box, null, clock: DateTime.now);
+
+  HydratedStorage._(
+    this._box,
+    this._meta, {
+    required DateTime Function() clock,
+    Duration useResolution = defaultUseResolution,
+  })  : _clock = clock,
+        _useResolution = useResolution;
+
+  /// The box name used when none is given to [build].
+  static const defaultBoxName = 'hydrated_box';
+
+  /// Suffix of the companion box holding each key's last-use time.
+  static const _metaBoxSuffix = '__meta';
+
+  /// How often a key's use time is rewritten at most, by default.
+  static const defaultUseResolution = Duration(minutes: 1);
 
   /// Returns an instance of [HydratedStorage].
-  /// [storageDirectory] is required.
   ///
-  /// For web, use [HydratedStorageDirectory.web] as the `storageDirectory`
+  /// For web, use [HydratedStorageDirectory.web] as the [storageDirectory].
   ///
   /// ```dart
-  /// import 'package:flutter/foundation.dart';
-  /// import 'package:flutter/material.dart';
-  ///
-  /// import 'package:hydrated_mobx/hydrated_mobx.dart';
-  /// import 'package:path_provider/path_provider.dart';
-  ///
-  /// Future<void> main() async {
-  ///   WidgetsFlutterBinding.ensureInitialized();
-  ///   HydratedMobx.storage = await HydratedStorage.build(
-  ///     storageDirectory: kIsWeb
-  ///         ? HydratedStorageDirectory.web
-  ///         : HydratedStorageDirectory((await getTemporaryDirectory()).path),
-  ///   );
-  ///   runApp(App());
-  /// }
+  /// HydratedMobX.storage = await HydratedStorage.build(
+  ///   storageDirectory: kIsWeb
+  ///       ? HydratedStorageDirectory.web
+  ///       : HydratedStorageDirectory(
+  ///           (await getApplicationSupportDirectory()).path,
+  ///         ),
+  /// );
   /// ```
   ///
-  /// With [encryptionCipher] you can provide custom encryption.
-  /// Following snippet shows how to make default one:
-  /// ```dart
-  /// import 'package:crypto/crypto.dart';
-  /// import 'package:hydrated_mobx/hydrated_mobx.dart';
-  ///
-  /// const password = 'hydration';
-  /// final byteskey = sha256.convert(utf8.encode(password)).bytes;
-  /// return HydratedAesCipher(byteskey);
-  /// ```
+  /// - [encryptionCipher] encrypts the box, e.g.
+  ///   `HydratedAesCipher(sha256.convert(utf8.encode(password)).bytes)`.
+  /// - [boxName] picks the box, so several storages can live side by side.
+  /// - [maxAge] and [maxEntries] evict stale state once the box is open:
+  ///   see [evict]. [evictable] limits eviction to the keys it accepts.
+  /// - [trackUse] records use times without evicting at build, for a later
+  ///   [evict]. It is implied by [maxAge] and [maxEntries]. Use times live in
+  ///   a companion box and cost a small write when a key is used again after
+  ///   [useResolution]; storages that never evict skip all of it. Keep the
+  ///   setting the same across launches: keys written while it was off look
+  ///   as old as their last recorded use.
+  /// - [compactionStrategy] overrides when Hive rewrites the box file.
   static Future<HydratedStorage> build({
     required HydratedStorageDirectory storageDirectory,
     HydratedCipher? encryptionCipher,
+    String boxName = defaultBoxName,
+    Duration? maxAge,
+    int? maxEntries,
+    bool Function(String key)? evictable,
+    bool trackUse = false,
+    Duration useResolution = defaultUseResolution,
+    HydratedCompactionStrategy? compactionStrategy,
+    @visibleForTesting DateTime Function() clock = DateTime.now,
   }) {
-    return _lock.synchronized(() async {
-      // Use HiveImpl directly to avoid conflicts with existing Hive.init
-      // https://github.com/hivedb/hive/issues/336
-      hive = HiveImpl();
-      Box<dynamic> box;
-
-      if (storageDirectory == HydratedStorageDirectory.web) {
-        box = await hive.openBox<dynamic>(
-          'hydrated_box',
-          encryptionCipher: encryptionCipher,
-        );
-      } else {
+    final lock = _buildLocks.putIfAbsent(
+      '${storageDirectory.path}/$boxName',
+      Lock.new,
+    );
+    return lock.synchronized(() async {
+      final hive = HiveImpl();
+      if (storageDirectory != HydratedStorageDirectory.web) {
         hive.init(storageDirectory.path);
-        box = await hive.openBox<dynamic>(
-          'hydrated_box',
-          encryptionCipher: encryptionCipher,
-        );
-        await migrate(storageDirectory.path, box);
       }
-
-      return HydratedStorage(box);
+      final strategy = compactionStrategy ?? _defaultCompaction;
+      Future<Box<dynamic>> open(String name) => hive.openBox<dynamic>(
+            name,
+            encryptionCipher: encryptionCipher,
+            compactionStrategy: strategy,
+          );
+      final tracks = trackUse || maxAge != null || maxEntries != null;
+      final boxes = await Future.wait([
+        open(boxName),
+        if (tracks) open('$boxName$_metaBoxSuffix'),
+      ]);
+      final storage = HydratedStorage._(
+        boxes.first,
+        tracks ? boxes.last : null,
+        clock: clock,
+        useResolution: useResolution,
+      );
+      await storage._stampUntracked();
+      if (maxAge != null || maxEntries != null) {
+        await storage.evict(
+          olderThan: maxAge,
+          maxEntries: maxEntries,
+          where: evictable,
+        );
+      }
+      return storage;
     });
   }
 
-  /// Internal instance of [HiveImpl].
-  /// It should only be used for testing.
-  @visibleForTesting
-  static late HiveInterface hive;
+  /// Hive's own default (not exported): at least 60 dead frames making up
+  /// over 15% of the file.
+  static bool _defaultCompaction(int entries, int deletedEntries) =>
+      deletedEntries > 60 && deletedEntries / entries > 0.15;
 
-  static final _lock = Lock();
+  /// One per box file, so building different boxes runs in parallel.
+  static final _buildLocks = <String, Lock>{};
 
   final Box<dynamic> _box;
 
-  // Unlike write/delete/clear/close, read is intentionally not guarded by
-  // [_lock]. Hive's `get` is a synchronous, in-memory map lookup with no
-  // `await`, so on Dart's single-threaded event loop it cannot interleave with
-  // a mutating operation mid-flight. The lock only orders the async I/O of the
-  // mutating ops; guarding read would force it to become asynchronous for no
-  // correctness benefit.
-  @override
-  dynamic read(String key) => _box.isOpen ? _box.get(key) : null;
+  /// Last-use time (ms since epoch) of each state key, for [evict].
+  final Box<dynamic>? _meta;
 
+  final DateTime Function() _clock;
+  final Duration _useResolution;
+
+  final _lock = Lock();
+
+  void _checkOpen(String operation) {
+    if (!_box.isOpen) throw StorageClosedException(operation);
+  }
+
+  // Unlike the mutating ops, read is not guarded by [_lock]: Hive's `get` is
+  // a synchronous in-memory lookup that cannot interleave with a mutation on
+  // Dart's single-threaded event loop.
   @override
-  Future<void> write(String key, dynamic value) async {
-    if (_box.isOpen) {
-      return _lock.synchronized(() => _box.put(key, value));
-    }
+  dynamic read(String key) {
+    _checkOpen('read');
+    return _box.get(key);
   }
 
   @override
-  Future<void> delete(String key) async {
-    if (_box.isOpen) {
-      return _lock.synchronized(() => _box.delete(key));
-    }
+  Iterable<String> get keys {
+    _checkOpen('list keys');
+    return _box.keys.whereType<String>();
   }
 
   @override
-  Future<void> clear() async {
-    if (_box.isOpen) {
-      return _lock.synchronized(() async {
-        // Dispose every live store's persistence reaction first so that no
-        // autorun can re-write state into the box after we wipe it.
-        HydratedMobX.disposeAllForClear();
-        await _box.clear();
-      });
-    }
+  Future<void> write(String key, dynamic value) {
+    _checkOpen('write');
+    return _lock.synchronized(
+      () => Future.wait([_box.put(key, value), _stamp(key)]),
+    );
+  }
+
+  @override
+  Future<void> delete(String key) => deleteAll([key]);
+
+  @override
+  Future<void> deleteAll(Iterable<String> keys) {
+    _checkOpen('delete');
+    final list = keys.toList();
+    if (list.isEmpty) return Future.value();
+    return _lock.synchronized(
+      () => Future.wait([
+        _box.deleteAll(list),
+        if (_meta case final meta?) meta.deleteAll(list),
+      ]),
+    );
+  }
+
+  @override
+  Future<void> clear() {
+    _checkOpen('clear');
+    return _lock.synchronized(() async {
+      // Suspend this storage's live stores first, so no reaction writes
+      // state back into the box after the wipe.
+      HydratedMobX.suspendAll(storage: this);
+      await Future.wait([
+        _box.clear(),
+        if (_meta case final meta?) meta.clear(),
+      ]);
+    });
   }
 
   @override
   Future<void> close() async {
-    if (_box.isOpen) {
-      return _lock.synchronized(_box.close);
+    if (!_box.isOpen) return;
+    return _lock.synchronized(
+      () =>
+          Future.wait([_box.close(), if (_meta case final meta?) meta.close()]),
+    );
+  }
+
+  /// Deletes stale state, together with its `.__version` key.
+  ///
+  /// - [olderThan] drops every key not hydrated or written for that long.
+  /// - [maxEntries] then keeps only that many keys, the most recently used.
+  /// - [where] limits both to the keys it accepts; other keys are never
+  ///   evicted and do not count towards [maxEntries].
+  ///
+  /// A key's use time has the resolution given to [build]. Keys written before
+  /// eviction metadata existed count as used when the storage was built.
+  ///
+  /// Live stores of evicted keys stop persisting, as with
+  /// [HydratedMobX.clearAll]. Does nothing unless the storage was built to
+  /// track use (`trackUse`, `maxAge` or `maxEntries`).
+  Future<void> evict({
+    Duration? olderThan,
+    int? maxEntries,
+    bool Function(String key)? where,
+  }) async {
+    _checkOpen('evict');
+    final meta = _meta;
+    if (meta == null) return;
+    final now = _clock().millisecondsSinceEpoch;
+    final candidates = [
+      for (final key in keys)
+        if (!HydratedMobX.isVersionKey(key) && (where?.call(key) ?? true))
+          (key: key, usedAt: _usedAt(meta, key) ?? now),
+    ];
+    final doomed = <String>{};
+    if (olderThan != null) {
+      final cutoff = now - olderThan.inMilliseconds;
+      doomed.addAll([
+        for (final c in candidates)
+          if (c.usedAt < cutoff) c.key,
+      ]);
     }
+    if (maxEntries != null) {
+      final kept = [
+        for (final c in candidates)
+          if (!doomed.contains(c.key)) c,
+      ]..sort((a, b) => b.usedAt.compareTo(a.usedAt));
+      doomed.addAll(kept.skip(maxEntries).map((c) => c.key));
+    }
+    if (doomed.isEmpty) return;
+    // The shared path: suspends live stores of doomed keys and deletes their
+    // version keys too.
+    await HydratedMobX.clearAll(storage: this, where: doomed.contains);
+  }
+
+  static int? _usedAt(Box<dynamic> meta, String key) {
+    final value = meta.get(key);
+    return value is int ? value : null;
+  }
+
+  /// Gives every key without a use time one, so state written before
+  /// eviction metadata existed is aged from now rather than evicted at once.
+  Future<void> _stampUntracked() async {
+    final meta = _meta;
+    if (meta == null) return;
+    final now = _clock().millisecondsSinceEpoch;
+    final untracked = {
+      for (final key in keys)
+        if (!HydratedMobX.isVersionKey(key) && !meta.containsKey(key)) key: now,
+    };
+    if (untracked.isNotEmpty) await meta.putAll(untracked);
+  }
+
+  /// Whether [key]'s use time is due to be rewritten: it is a state key and
+  /// was not recorded within the use resolution.
+  bool _dueStamp(Box<dynamic> meta, String key) {
+    if (HydratedMobX.isVersionKey(key)) return false;
+    final last = _usedAt(meta, key);
+    return last == null ||
+        _clock().millisecondsSinceEpoch - last >= _useResolution.inMilliseconds;
+  }
+
+  /// Records [key]'s use time when [_dueStamp]. Caller holds [_lock].
+  Future<void> _stamp(String key) async {
+    final meta = _meta;
+    if (meta == null || !meta.isOpen || !_dueStamp(meta, key)) return;
+    await meta.put(key, _clock().millisecondsSinceEpoch);
+  }
+
+  @override
+  void markUsed(String key) {
+    final meta = _meta;
+    if (meta == null || !meta.isOpen || !_dueStamp(meta, key)) return;
+    // Best effort: a lost use time only makes the key look older.
+    unawaited(_lock.synchronized(() => _stamp(key)).catchError((Object _) {}));
   }
 }

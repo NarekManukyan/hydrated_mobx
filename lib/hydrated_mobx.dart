@@ -9,3 +9,4 @@ export 'src/hydrated_cipher.dart';
 export 'src/hydrated_json.dart';
 export 'src/hydrated_mobx.dart' hide NIL;
 export 'src/hydrated_storage.dart';
+export 'src/in_memory_storage.dart';
