@@ -80,10 +80,19 @@ class Feed extends HydratedMobX with Store {
 
 Future<void> _settle() => Future<void>.delayed(const Duration(milliseconds: 5));
 
-Future<HydratedStorage> _open(Directory dir, {int? maxEntries}) =>
+Future<HydratedStorage> _open(
+  Directory dir, {
+  String boxName = HydratedStorage.defaultBoxName,
+  bool trackUse = false,
+  int? maxEntries,
+}) =>
     HydratedStorage.build(
       storageDirectory: HydratedStorageDirectory(dir.path),
+      boxName: boxName,
+      trackUse: trackUse,
       maxEntries: maxEntries,
+      // Every write stamped, so the order of the 500 writes is kept.
+      useResolution: Duration.zero,
     );
 
 Future<void> main() async {
@@ -135,7 +144,9 @@ Future<void> main() async {
       }
       watch.stop();
       final stored = disk.read(feed.storageToken) as Map;
-      assert(stored['revision'] == _largeWrites, 'last write landed');
+      if (stored['revision'] != _largeWrites) {
+        throw StateError('the last write did not land');
+      }
       final perWrite = watch.elapsedMicroseconds / _largeWrites / 1000;
       final perChange = blocking.elapsedMicroseconds / _largeWrites / 1000;
       print('$_rows-row state, trustToJson $trusted: '
@@ -144,22 +155,28 @@ Future<void> main() async {
       feed.dispose();
     }
 
-    // 4. A per-id cache with and without maxEntries.
-    await disk.clear();
+    await disk.close();
+
+    // 4. A per-id cache with and without maxEntries, in a box that records
+    // use times from the start, as an evicting storage must.
+    final cache = await _open(dir, boxName: 'cache', trackUse: true);
     for (var i = 0; i < _cachedItems; i++) {
-      Counter(storage: disk, storeId: '$i')
+      Counter(storage: cache, storeId: '$i')
         ..increment()
         ..dispose();
+      await _settle();
     }
-    await _settle();
-    await disk.close();
-    final file = File('${dir.path}/hydrated_box.hive');
-    final before = file.lengthSync();
-    final bounded = await _open(dir, maxEntries: 50);
-    final kept = bounded.keys.length;
+    await cache.close();
+    final before = File('${dir.path}/cache.hive').lengthSync();
+    final bounded = await _open(dir, boxName: 'cache', maxEntries: 50);
+    final kept = bounded.keys.toSet();
     await bounded.close();
+    final newest = {
+      for (var i = _cachedItems - 50; i < _cachedItems; i++) 'counter$i',
+    };
     print('$_cachedItems cached ids: ${(before / 1024).toStringAsFixed(1)} KB; '
-        'built with maxEntries 50: $kept keys kept');
+        'built with maxEntries 50: ${kept.length} keys kept, '
+        '${kept.containsAll(newest) ? 'the 50 newest' : 'NOT the newest'}');
   } finally {
     await dir.delete(recursive: true);
   }
