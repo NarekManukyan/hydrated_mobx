@@ -269,6 +269,17 @@ class HydratedStorage implements UseTrackingStorage {
     if (!_box.isOpen) throw StorageClosedException(operation);
   }
 
+  /// Runs [body] under [_lock], checking the box is open both now and when
+  /// its turn comes: a call queued behind [close] fails with
+  /// [StorageClosedException], not Hive's own error.
+  Future<void> _locked(String operation, Future<void> Function() body) {
+    _checkOpen(operation);
+    return _lock.synchronized(() {
+      _checkOpen(operation);
+      return body();
+    });
+  }
+
   // Unlike the mutating ops, read is not guarded by [_lock]: Hive's `get` is
   // a synchronous in-memory lookup that cannot interleave with a mutation on
   // Dart's single-threaded event loop.
@@ -286,8 +297,8 @@ class HydratedStorage implements UseTrackingStorage {
 
   @override
   Future<void> write(String key, dynamic value) {
-    _checkOpen('write');
-    return _lock.synchronized(
+    return _locked(
+      'write',
       () => Future.wait([_box.put(key, value), _stamp(key)]),
     );
   }
@@ -300,7 +311,8 @@ class HydratedStorage implements UseTrackingStorage {
     _checkOpen('delete');
     final list = keys.toList();
     if (list.isEmpty) return Future.value();
-    return _lock.synchronized(
+    return _locked(
+      'delete',
       () => Future.wait([
         _box.deleteAll(list),
         if (_meta case final meta?) meta.deleteAll(list),
@@ -311,10 +323,10 @@ class HydratedStorage implements UseTrackingStorage {
   @override
   Future<void> clear() {
     _checkOpen('clear');
-    return _lock.synchronized(() async {
-      // Suspend this storage's live stores first, so no reaction writes
-      // state back into the box after the wipe.
-      HydratedMobX.suspendAll(storage: this);
+    // Suspend this storage's live stores now, not when the lock frees up: a
+    // write they queued meanwhile would land after the wipe.
+    HydratedMobX.suspendAll(storage: this);
+    return _locked('clear', () async {
       await Future.wait([
         _box.clear(),
         if (_meta case final meta?) meta.clear(),
@@ -349,6 +361,9 @@ class HydratedStorage implements UseTrackingStorage {
     int? maxEntries,
     bool Function(String key)? where,
   }) async {
+    if (maxEntries != null && maxEntries < 0) {
+      throw ArgumentError.value(maxEntries, 'maxEntries', 'must be >= 0');
+    }
     _checkOpen('evict');
     final meta = _meta;
     if (meta == null) return;

@@ -143,10 +143,17 @@ abstract class HydratedMobX with Store {
     final target = storage ?? HydratedMobX.storage;
     for (final entry in data.entries) {
       if (!overwrite && target.read(entry.key) != null) continue;
-      await target.write(entry.key, entry.value);
+      // The version first: a crash before the state is written leaves a
+      // version with nothing to hydrate, which is harmless, rather than state
+      // that a later import skips and then migrates as the wrong version.
+      final versionKey = versionKeyOf(entry.key);
       if (version > 1) {
-        await target.write(versionKeyOf(entry.key), version);
+        await target.write(versionKey, version);
+      } else {
+        // An absent key reads as version 1; drop one a newer build stamped.
+        await target.delete(versionKey);
       }
+      await target.write(entry.key, entry.value);
     }
   }
 
@@ -211,8 +218,12 @@ abstract class HydratedMobX with Store {
   ///
   /// Call [flushAll] for [from] before closing it, so no pending write is
   /// lost.
+  ///
+  /// [to] built with `maxAge` or `maxEntries` evicts before the stores move
+  /// over, so a store whose key it evicted would write it back. Build [to]
+  /// with `trackUse: true` instead, rebind, then call `evict`.
   static void rebindAll({required Storage from, required Storage to}) {
-    for (final store in _live(from)) {
+    for (final store in _live(from, throughWrappers: false)) {
       store
         .._boundStorage = to
         .._forgetPersisted();
@@ -244,15 +255,26 @@ abstract class HydratedMobX with Store {
       Finalizer<WeakReference<HydratedMobX>>(_instances.remove);
 
   /// Live stores bound to [storage], or all of them when it is `null`.
+  /// With [throughWrappers], a store bound to a [ForwardingStorage] that
+  /// wraps [storage] counts too, since it writes into [storage].
   /// Prunes dead registry entries along the way.
-  static List<HydratedMobX> _live(Storage? storage) {
+  static List<HydratedMobX> _live(
+    Storage? storage, {
+    bool throughWrappers = true,
+  }) {
+    bool writesInto(Storage? bound) {
+      for (var s = bound; s != null;) {
+        if (identical(s, storage)) return true;
+        s = throughWrappers && s is ForwardingStorage ? s.inner : null;
+      }
+      return false;
+    }
+
     final live = <HydratedMobX>[];
     _instances.removeWhere((ref) {
       final store = ref.target;
       if (store == null) return true;
-      if (storage == null || identical(store._boundStorage, storage)) {
-        live.add(store);
-      }
+      if (storage == null || writesInto(store._boundStorage)) live.add(store);
       return false;
     });
     return live;
@@ -386,6 +408,13 @@ abstract class HydratedMobX with Store {
     OnHydrationError? onHydrationError,
     OnStorageError? onStorageError,
   }) {
+    if (isVersionKey(storageToken)) {
+      throw ArgumentError.value(
+        storageToken,
+        'storageToken',
+        'must not end with the reserved "$versionKeySuffix"',
+      );
+    }
     final target =
         _boundStorage = storage ?? _boundStorage ?? HydratedMobX.storage;
     if (onHydrationError != null) _onHydrationError = onHydrationError;
@@ -435,9 +464,9 @@ abstract class HydratedMobX with Store {
     Map<String, dynamic>? json = plainJson(stored)! as Map<String, dynamic>;
     if (storedVersion < version) {
       json = migrate(storedVersion, json);
-      observer.onMigrate(this, storedVersion, version);
       if (json == null) {
         _discard(target);
+        _notifyMigrated(storedVersion);
         return;
       }
     } else if (storedVersion > version) {
@@ -451,6 +480,17 @@ abstract class HydratedMobX with Store {
     fromJson(json);
     // The storage's own value, not the copy fromJson may keep and mutate.
     if (storedVersion == version) _lastPersisted = stored;
+    if (storedVersion < version) _notifyMigrated(storedVersion);
+  }
+
+  /// Tells the observer, once the store holds the migrated state; a failing
+  /// observer must not turn a good hydration into a failed one.
+  void _notifyMigrated(int fromVersion) {
+    try {
+      observer.onMigrate(this, fromVersion, version);
+    } catch (error, stackTrace) {
+      _reportStorageError(error, stackTrace);
+    }
   }
 
   /// Deletes stored state that [migrate] chose not to carry forward.
@@ -666,7 +706,8 @@ abstract class HydratedMobX with Store {
   /// in order to keep the caches independent of each other.
   String get id => '';
 
-  /// The fixed name this store's state is stored under.
+  /// The fixed name this store's state is stored under. Together with the
+  /// id it must not end with [versionKeySuffix], which is reserved.
   ///
   /// Required: deriving it from `runtimeType` would lose the stored state
   /// whenever the class is renamed or the build is obfuscated. Two store
@@ -743,7 +784,8 @@ abstract class HydratedMobX with Store {
   ///
   /// Any write pending from before the call is dropped, so the deleted key
   /// cannot be resurrected. Persistence then **stops**; pass `resume: true`
-  /// to keep persisting, which writes the current state back right away.
+  /// to keep persisting, which writes the current state back as any change
+  /// would: right away, or after `persistDelay`.
   /// To stop persisting without deleting anything, use [dispose].
   Future<void> clearPersisted({bool resume = false}) async {
     final target = _boundStorage!;

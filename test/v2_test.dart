@@ -283,21 +283,26 @@ void main() {
     });
 
     test('a failed write is retried by the next run', () async {
-      final store = _Counter(onStorageError: (_, __) {});
+      final store = _Counter(
+        persistDelay: const Duration(hours: 1),
+        onStorageError: (_, __) {},
+      );
       addTearDown(store.dispose);
-      await settle();
+      await store.flush();
       storage.failWrites = true;
       store.increment();
-      await settle();
+      await store.flush();
 
       storage
         ..failWrites = false
         ..writes.clear();
+      // Back to the state whose write failed: it must be written again.
       store
         ..increment()
         ..count = 1;
-      await settle();
+      await store.flush();
 
+      expect(storage.writes, ['counter']);
       expect(storage.read('counter'), {'count': 1});
     });
   });
@@ -433,9 +438,7 @@ void main() {
       addTearDown(store.dispose);
       await settle();
 
-      expect(storage.read('bag'), {
-        'data': {'a': 1},
-      });
+      expect((storage.read('bag') as Map)['data'], same(store.data));
     });
   });
 
@@ -747,6 +750,99 @@ void main() {
     });
   });
 
+  group('review fixes', () {
+    test('evict() on the inner storage stops stores bound to a wrapper',
+        () async {
+      final dir = await Directory.systemTemp.createTemp('hydrated_v2_');
+      addTearDown(() => dir.delete(recursive: true));
+      var now = DateTime(2026);
+      final disk = await HydratedStorage.build(
+        storageDirectory: HydratedStorageDirectory(dir.path),
+        trackUse: true,
+        clock: () => now,
+      );
+      addTearDown(disk.close);
+      final store = _Counter(storage: ForwardingStorage(disk))..increment();
+      addTearDown(store.dispose);
+      await settle();
+      now = now.add(const Duration(days: 2));
+
+      await disk.evict(olderThan: const Duration(days: 1));
+      store.increment();
+      await settle();
+
+      expect(disk.keys, isEmpty);
+    });
+
+    test('importData at version 1 drops a stale version key', () async {
+      await storage.write('counter.__version', 3);
+
+      await HydratedMobX.importData({
+        'counter': {'count': 1},
+      });
+
+      expect(storage.read('counter.__version'), isNull);
+    });
+
+    test('a throwing onMigrate keeps the migrated state', () async {
+      HydratedMobX.observer = _ThrowingMigrateObserver();
+      await storage.write('migrating', {'old': 4});
+      final errors = <Object>[];
+
+      final store = _Migrating(onStorageError: (e, _) => errors.add(e));
+      addTearDown(store.dispose);
+
+      expect(store.count, 4);
+      expect(errors.single, isA<StateError>());
+    });
+
+    test('a write queued behind close() throws StorageClosedException',
+        () async {
+      final dir = await Directory.systemTemp.createTemp('hydrated_v2_');
+      // Hive removes its lock file after close returns; don't race it.
+      addTearDown(
+        () => dir.delete(recursive: true).catchError(
+              (Object _) => dir,
+              test: (e) => e is FileSystemException,
+            ),
+      );
+      final disk = await HydratedStorage.build(
+        storageDirectory: HydratedStorageDirectory(dir.path),
+      );
+
+      // A write holds the lock, so close() and the next write queue behind
+      // it; that write finds the box open now and closed on its turn.
+      final first = disk.write('a', 1);
+      final closing = disk.close();
+      final queued = expectLater(
+        disk.write('k', 1),
+        throwsA(isA<StorageClosedException>()),
+      );
+      await first;
+      await closing;
+      await queued;
+    });
+
+    test('a token ending in the version suffix is rejected', () {
+      expect(
+        () => _Counter(prefix: 'x', storeId: '.__version'),
+        throwsArgumentError,
+      );
+    });
+
+    test('a negative maxEntries is rejected', () async {
+      final dir = await Directory.systemTemp.createTemp('hydrated_v2_');
+      addTearDown(() => dir.delete(recursive: true));
+      final disk = await HydratedStorage.build(
+        storageDirectory: HydratedStorageDirectory(dir.path),
+        trackUse: true,
+      );
+      addTearDown(disk.close);
+
+      expect(() => disk.evict(maxEntries: -1), throwsArgumentError);
+    });
+  });
+
   group('untracked side effects', () {
     test('observables read by the storage do not re-run persistence', () async {
       final seen = Observable(0);
@@ -812,4 +908,36 @@ void main() {
       expect(HydratedJson.readStringList(json, 'l'), ['a', 'b']);
     });
   });
+}
+
+class _ThrowingMigrateObserver extends HydratedObserver {
+  @override
+  void onMigrate(HydratedMobX store, int fromVersion, int toVersion) =>
+      throw StateError('observer failed');
+}
+
+/// Version 2 store renaming `old` to `count`.
+class _Migrating extends HydratedMobX with Store {
+  _Migrating({super.onStorageError});
+
+  final Observable<int> _count = Observable(0);
+
+  int get count => _count.value;
+
+  @override
+  String get storagePrefix => 'migrating';
+
+  @override
+  int get version => 2;
+
+  @override
+  Map<String, dynamic>? migrate(int oldVersion, Map<String, dynamic> old) =>
+      {'count': old['old']};
+
+  @override
+  Map<String, dynamic>? toJson() => {'count': _count.value};
+
+  @override
+  void fromJson(Map<String, dynamic> json) =>
+      _count.value = json['count'] as int? ?? 0;
 }

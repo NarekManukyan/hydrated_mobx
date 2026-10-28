@@ -26,9 +26,10 @@ class HydratedJson {
   HydratedJson._();
 
   /// Reads a list from [json] under [key]. Returns an empty list if the key is
-  /// missing, null, or not a [List]. Every element that is a [Map] (with any
-  /// key type, as raw storage returns them) is passed to [fromJson] as a deep
-  /// `Map<String, dynamic>`; other elements are skipped.
+  /// missing, null, or not a [List]. Every element that is a [Map] is passed
+  /// to [fromJson] as a `Map<String, dynamic>`: as it is when it already is
+  /// one (everything `fromJson` receives is, deeply), otherwise converted
+  /// deeply. Other elements are skipped.
   static List<T> readList<T>(
     Map<String, dynamic> json,
     String key,
@@ -43,8 +44,9 @@ class HydratedJson {
   }
 
   /// Reads a single object from [json] under [key]. Returns null if the key is
-  /// missing, the value is not a [Map], or [fromJson] returns null. A map with
-  /// any key type is passed on as a deep `Map<String, dynamic>`.
+  /// missing, the value is not a [Map], or [fromJson] returns null. The map
+  /// is passed on as a `Map<String, dynamic>`, converted deeply unless it
+  /// already is one.
   static T? readObject<T>(
     Map<String, dynamic> json,
     String key,
