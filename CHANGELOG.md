@@ -21,6 +21,8 @@ See "Migrating from 1.x" in the README for the upgrade steps.
   `StorageClosedException` (reported to the error handlers) instead of being
   silently ignored.
 - The `.hydrated_bloc.json` migration inherited from hydrated_bloc is removed.
+- The `@visibleForTesting` static `HydratedStorage.hive` is removed; each
+  storage now opens its own Hive instance.
 
 ### Added
 
@@ -48,9 +50,11 @@ See "Migrating from 1.x" in the README for the upgrade steps.
 - `UseTrackingStorage.markUsed`: hydrating a key counts as using it for
   eviction; a plain `read` does not.
 - `HydratedMobX.rebindAll(from:, to:)` moves live stores to a rebuilt storage.
-- `HydratedJson.readStringList`; `importData(storage:)`.
+- `HydratedJson.readStringList`; `importData(storage:)`. `importData` writes
+  the version key before the state, and at version 1 drops a version key a
+  newer build left.
 - `benchmark/persistence_benchmark.dart`.
-- The example app shows every feature, one screen each.
+- The example app has one screen per feature area.
 
 ### Changed
 

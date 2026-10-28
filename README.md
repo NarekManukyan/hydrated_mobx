@@ -73,6 +73,10 @@ Future<void> main() async {
 }
 ```
 
+Upgrading from 1.x? Keep the directory you built the storage in before. The
+1.x docs used `getApplicationDocumentsDirectory()`; a different directory opens
+an empty box, and every store starts from its defaults.
+
 ## A hydrated store
 
 ```dart
@@ -403,9 +407,17 @@ To close a storage and open it again while stores are live, move them over:
 ```dart
 await HydratedMobX.flushAll(storage: cache);
 await cache.close();
-final reopened = await HydratedStorage.build(/* ... */);
+final reopened = await HydratedStorage.build(
+  storageDirectory: directory,
+  boxName: 'cache',
+  trackUse: true,
+);
 HydratedMobX.rebindAll(from: cache, to: reopened);
+await reopened.evict(maxEntries: 200);
 ```
+
+Evict after `rebindAll`, not while building: eviction stops the live stores of
+the keys it deletes, and only once they are bound to the new storage.
 
 ## Performance notes
 
@@ -451,12 +463,13 @@ flutter run
 | `defaultOnHydrationError`, `defaultOnStorageError` | `HydratedObserver`; per-store handlers are optional |
 | `Storage` had 5 members | Add `deleteAll` and `keys`; call `HydratedMobX.suspendAll(storage: this)` from `clear` |
 | `HydratedMobX.disposeAllForClear()` | `HydratedMobX.suspendAll(storage: ...)` |
-| Writes to a closed storage were ignored | They throw `StorageClosedException`, reported to the error handlers |
+| A closed storage ignored writes and read as empty | Reads, writes and `keys` throw `StorageClosedException`; store failures go to the error handlers |
+| `HydratedStorage.hive` (testing hook) | Removed; each storage has its own Hive instance |
 | `.hydrated_bloc.json` imported at build | Removed; use `importData` |
 | Every change and every construction wrote | Unchanged state is not written |
 
 Stored data needs no conversion: 1.x boxes open as they are, under the default
-`boxName`.
+`boxName`, as long as the storage is built in the same directory as before.
 
 ## More
 
