@@ -51,6 +51,17 @@ mixin _$CounterStore on CounterStoreBase, Store {
   }
 
   @override
+  void reset() {
+    final _$actionInfo = _$CounterStoreBaseActionController.startAction(
+        name: 'CounterStoreBase.reset');
+    try {
+      return super.reset();
+    } finally {
+      _$CounterStoreBaseActionController.endAction(_$actionInfo);
+    }
+  }
+
+  @override
   String toString() {
     return '''
 count: ${count}
