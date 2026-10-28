@@ -8,20 +8,17 @@ class DemoPage extends StatelessWidget {
     required this.title,
     required this.explainer,
     required this.children,
-    this.floatingActionButton,
   });
 
   final String title;
   final String explainer;
   final List<Widget> children;
-  final Widget? floatingActionButton;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: Text(title)),
-      floatingActionButton: floatingActionButton,
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
         children: [
@@ -101,8 +98,11 @@ class StatTile extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 4),
-        Text(label,
-            textAlign: TextAlign.center, style: theme.textTheme.bodySmall),
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodySmall,
+        ),
       ],
     );
   }
@@ -116,9 +116,7 @@ class StatRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [for (final tile in tiles) Expanded(child: tile)],
-    );
+    return Row(children: [for (final tile in tiles) Expanded(child: tile)]);
   }
 }
 

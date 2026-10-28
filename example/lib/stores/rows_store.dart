@@ -9,15 +9,15 @@ class RowsStore = RowsStoreBase with _$RowsStore;
 /// traversal [trustToJson] skips.
 abstract class RowsStoreBase extends HydratedMobX with Store {
   RowsStoreBase({required this.trusted, required int rowCount, super.storage})
-      : _rows = [
-          for (var i = 0; i < rowCount; i++)
-            {
-              'id': i,
-              'title': 'Row $i',
-              'score': 0,
-              'tags': ['a', 'b'],
-            },
-        ];
+    : _rows = [
+        for (var i = 0; i < rowCount; i++)
+          {
+            'id': i,
+            'title': 'Row $i',
+            'score': 0,
+            'tags': ['a', 'b'],
+          },
+      ];
 
   final bool trusted;
   final List<Map<String, dynamic>> _rows;
@@ -42,15 +42,15 @@ abstract class RowsStoreBase extends HydratedMobX with Store {
   // Fresh maps and lists on every call, as trustToJson requires.
   @override
   Map<String, dynamic>? toJson() => {
-        'revision': revision,
-        'rows': [
-          for (final row in _rows)
-            {
-              ...row,
-              'tags': [...row['tags'] as List]
-            },
-        ],
-      };
+    'revision': revision,
+    'rows': [
+      for (final row in _rows)
+        {
+          ...row,
+          'tags': [...row['tags'] as List],
+        },
+    ],
+  };
 
   @override
   void fromJson(Map<String, dynamic> json) {

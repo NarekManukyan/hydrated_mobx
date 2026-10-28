@@ -62,7 +62,8 @@ class _TrustJsonPageState extends State<TrustJsonPage> {
     final trusted = _trustedMs;
     return DemoPage(
       title: 'trustToJson',
-      explainer: 'A store of $_kRows plain-JSON rows. By default each write '
+      explainer:
+          'A store of $_kRows plain-JSON rows. By default each write '
           'walks and copies the whole map. A store whose toJson already '
           'returns plain JSON can override trustToJson to skip that walk.',
       children: [

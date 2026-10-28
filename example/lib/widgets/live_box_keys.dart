@@ -22,7 +22,8 @@ class LiveBoxKeys extends StatefulWidget {
   /// Read on every refresh: a box can be closed and rebuilt meanwhile.
   final Storage Function() storage;
 
-  /// Shows a delete button per key when set.
+  /// Shows a delete button per key when set; it deletes the key's whole
+  /// token, state and version.
   final void Function(String key)? onDelete;
 
   @override
@@ -64,7 +65,9 @@ class _LiveBoxKeysState extends State<LiveBoxKeys> {
             trailing: widget.onDelete == null
                 ? null
                 : IconButton(
-                    tooltip: 'Delete $key',
+                    tooltip:
+                        'Delete ${HydratedMobX.tokenOfKey(key)} '
+                        '(state and version)',
                     icon: const Icon(Icons.delete_outline),
                     onPressed: () => widget.onDelete!(key),
                   ),

@@ -28,7 +28,8 @@ class _KeyedPageState extends State<KeyedPage> {
   Widget build(BuildContext context) {
     return DemoPage(
       title: 'Keyed instances',
-      explainer: 'Three instances of one store type. Passing storeId gives '
+      explainer:
+          'Three instances of one store type. Passing storeId gives '
           'each its own key, so their states never mix.',
       children: [
         for (final MapEntry(key: id, value: store) in _stores.entries)

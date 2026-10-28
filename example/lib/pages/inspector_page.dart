@@ -12,7 +12,8 @@ class InspectorPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return DemoPage(
       title: 'Storage inspector',
-      explainer: 'Every key in every box, live, via Storage.keys. Deleting '
+      explainer:
+          'Every key in every box, live, via Storage.keys. Deleting '
           'goes through HydratedMobX.deleteToken, which also removes the '
           "key's version and stops a live store from writing it back.",
       children: [
@@ -24,8 +25,6 @@ class InspectorPage extends StatelessWidget {
               LiveBoxKeys(
                 title: name,
                 storage: storage,
-                // Reading a value refreshes its key's use time, which would
-                // keep every key in the capped recent box from eviction.
                 onDelete: (key) => HydratedMobX.deleteToken(
                   HydratedMobX.tokenOfKey(key),
                   storage: storage(),

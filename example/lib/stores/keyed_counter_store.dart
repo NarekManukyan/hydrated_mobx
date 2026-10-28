@@ -8,7 +8,7 @@ class KeyedCounterStore = KeyedCounterStoreBase with _$KeyedCounterStore;
 /// Many instances of one store type: each `storeId` gets its own key,
 /// `keyed_counter_<id>`.
 abstract class KeyedCounterStoreBase extends HydratedMobX with Store {
-  KeyedCounterStoreBase(String id) : super(storeId: id);
+  KeyedCounterStoreBase(String storeId) : super(storeId: storeId);
 
   @observable
   int count = 0;

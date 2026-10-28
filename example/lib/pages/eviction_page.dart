@@ -18,39 +18,54 @@ class _EvictionPageState extends State<EvictionPage> {
   final _viewed = <int>[];
   bool _rebuilding = false;
 
+  // Open for the page's lifetime, so a rebuild moves it to the new box.
+  final _pinned = PinnedNoteStore(appStorages.recent);
+
   @override
-  void initState() {
-    super.initState();
-    // Writes the pinned note once, beside the cache entries.
-    final pinned = PinnedNoteStore();
-    pinned.flush().whenComplete(pinned.dispose);
+  void dispose() {
+    _pinned.dispose();
+    super.dispose();
   }
 
   /// Opens item [index]'s cache entry, counts a view and closes it again.
   Future<void> _view(int index) async {
-    final store = RecentItemStore('item_$index')..view();
+    final store = RecentItemStore('item_$index', appStorages.recent)..view();
     await store.flush();
     store.dispose();
-    setState(() => _viewed
-      ..remove(index)
-      ..add(index));
+    if (!mounted) return;
+    setState(
+      () => _viewed
+        ..remove(index)
+        ..add(index),
+    );
   }
 
   Future<void> _rebuild() async {
     setState(() => _rebuilding = true);
-    await appStorages.rebuildRecent();
-    setState(() => _rebuilding = false);
+    try {
+      await appStorages.rebuildRecent();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Rebuild failed: $error')));
+      }
+    } finally {
+      if (mounted) setState(() => _rebuilding = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return DemoPage(
       title: 'Eviction',
-      explainer: 'The "recent" box is built with maxEntries: '
+      explainer:
+          'The "recent" box is built with maxEntries: '
           '$kRecentMaxEntries and an evictable filter for "$kRecentPrefix" '
           'keys. View more than $kRecentMaxEntries items, then rebuild the '
-          'storage: eviction runs at build and keeps the most recently used '
-          'ones. The pinned note is never evicted.',
+          'storage: it reopens the box tracking use, moves the live pinned '
+          'note store over with rebindAll, then calls evict, which keeps the '
+          'most recently used items. The pinned note is never evicted.',
       children: [
         Section(
           title: 'Items',
@@ -64,7 +79,8 @@ class _EvictionPageState extends State<EvictionPage> {
                     key: Key('recent_item_$i'),
                     label: Text('Item $i'),
                     selected: _viewed.contains(i),
-                    onSelected: (_) => _view(i),
+                    // A tap mid-rebuild would bind to the closing box.
+                    onSelected: _rebuilding ? null : (_) => _view(i),
                   ),
               ],
             ),

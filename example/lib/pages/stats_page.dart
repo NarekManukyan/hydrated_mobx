@@ -24,16 +24,19 @@ class _StatsPageState extends State<StatsPage> {
   Future<int> _writesDuring(String key, Future<void> Function() work) async {
     final before = appStorages.main.writesOf(key);
     await work();
-    // The counting storage records writes in a microtask.
-    await Future<void>.delayed(Duration.zero);
     return appStorages.main.writesOf(key) - before;
   }
 
   Future<void> _run() async {
     setState(() => _running = true);
-    final immediate =
-        StatsCounterStore(id: 'immediate', persistDelay: Duration.zero);
-    final delayed = StatsCounterStore(id: 'delayed', persistDelay: _kDelay);
+    final immediate = StatsCounterStore(
+      storeId: 'immediate',
+      persistDelay: Duration.zero,
+    );
+    final delayed = StatsCounterStore(
+      storeId: 'delayed',
+      persistDelay: _kDelay,
+    );
     await delayed.flush();
 
     final immediateWrites = await _writesDuring('stats_immediate', () async {
@@ -55,7 +58,10 @@ class _StatsPageState extends State<StatsPage> {
     // write back (1.x wrote it again on every construction).
     late StatsCounterStore again;
     final recreateWrites = await _writesDuring('stats_immediate', () async {
-      again = StatsCounterStore(id: 'immediate', persistDelay: Duration.zero);
+      again = StatsCounterStore(
+        storeId: 'immediate',
+        persistDelay: Duration.zero,
+      );
       await again.flush();
     });
     again.dispose();
@@ -74,7 +80,8 @@ class _StatsPageState extends State<StatsPage> {
     String show(int? value) => value == null ? '–' : '$value';
     return DemoPage(
       title: 'Write stats',
-      explainer: 'The default box is wrapped in a counting Storage. Run '
+      explainer:
+          'The default box is wrapped in a counting Storage. Run '
           '$_kChanges rapid changes against a store without persistDelay and '
           'one with ${_kDelay.inMilliseconds} ms, then re-create a store.',
       children: [
@@ -84,7 +91,9 @@ class _StatsPageState extends State<StatsPage> {
             StatRow(
               tiles: [
                 StatTile(
-                    label: 'writes, no delay', value: show(_immediateWrites)),
+                  label: 'writes, no delay',
+                  value: show(_immediateWrites),
+                ),
                 StatTile(
                   label: 'writes, ${_kDelay.inMilliseconds} ms delay',
                   value: show(_delayedWrites),
@@ -119,17 +128,21 @@ class _StatsPageState extends State<StatsPage> {
                     StatRow(
                       tiles: [
                         StatTile(
-                            label: 'writes', value: '${storage.totalWrites}'),
+                          label: 'writes',
+                          value: '${storage.totalWrites}',
+                        ),
                         StatTile(
-                            label: 'KB written',
-                            value: (bytes / 1024).toStringAsFixed(1)),
+                          label: 'KB written',
+                          value: (bytes / 1024).toStringAsFixed(1),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 8),
                     for (final entry in entries)
                       KeyValueTile(
                         storageKey: entry.key,
-                        value: '${entry.value} writes, '
+                        value:
+                            '${entry.value} writes, '
                             '${storage.bytes[entry.key] ?? 0} bytes',
                       ),
                   ],

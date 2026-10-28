@@ -16,7 +16,7 @@ class EncryptionPage extends StatefulWidget {
 }
 
 class _EncryptionPageState extends State<EncryptionPage> {
-  final _store = VaultNoteStore();
+  final _store = VaultNoteStore(appStorages.vault);
   late final _text = TextEditingController(text: _store.text);
   String? _check;
 
@@ -36,11 +36,12 @@ class _EncryptionPageState extends State<EncryptionPage> {
     final bytes = await file.readAsBytes();
     final needle = utf8.encode(_store.text);
     final found = _indexOf(bytes, needle) >= 0;
+    if (!mounted) return;
     setState(() {
       _check = found
           ? 'Found the note as plain text in $kVaultBox.hive'
           : 'The note is not in $kVaultBox.hive as plain text '
-              '(${bytes.length} bytes, AES-256 encrypted)';
+                '(${bytes.length} bytes, AES-256 encrypted)';
     });
   }
 
@@ -59,7 +60,8 @@ class _EncryptionPageState extends State<EncryptionPage> {
   Widget build(BuildContext context) {
     return DemoPage(
       title: 'Encryption',
-      explainer: 'The "vault" box is built with a HydratedAesCipher, so '
+      explainer:
+          'The "vault" box is built with a HydratedAesCipher, so '
           'its file on disk is AES-256 encrypted. Stores read and write it '
           'like any other box.',
       children: [

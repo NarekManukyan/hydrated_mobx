@@ -6,12 +6,11 @@ import 'package:mobx/mobx.dart';
 enum LogKind { hydrationError, storageError, migration }
 
 class LogEntry {
-  LogEntry(this.kind, this.token, this.message) : at = DateTime.now();
+  LogEntry(this.kind, this.token, this.message);
 
   final LogKind kind;
   final String token;
   final String message;
-  final DateTime at;
 }
 
 /// Set once as [HydratedMobX.observer]: every store without its own handler
@@ -48,8 +47,7 @@ class AppObserver extends HydratedObserver {
     HydratedMobX store,
     Object error,
     StackTrace stackTrace,
-  ) =>
-      _add(LogKind.storageError, store, '$error');
+  ) => _add(LogKind.storageError, store, '$error');
 
   @override
   void onMigrate(HydratedMobX store, int fromVersion, int toVersion) =>

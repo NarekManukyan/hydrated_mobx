@@ -9,8 +9,10 @@ part of 'keyed_counter_store.dart';
 // ignore_for_file: non_constant_identifier_names, unnecessary_brace_in_string_interps, unnecessary_lambdas, prefer_expression_function_bodies, lines_longer_than_80_chars, avoid_as, avoid_annotating_with_dynamic, no_leading_underscores_for_local_identifiers
 
 mixin _$KeyedCounterStore on KeyedCounterStoreBase, Store {
-  late final _$countAtom =
-      Atom(name: 'KeyedCounterStoreBase.count', context: context);
+  late final _$countAtom = Atom(
+    name: 'KeyedCounterStoreBase.count',
+    context: context,
+  );
 
   @override
   int get count {
@@ -25,13 +27,16 @@ mixin _$KeyedCounterStore on KeyedCounterStoreBase, Store {
     });
   }
 
-  late final _$KeyedCounterStoreBaseActionController =
-      ActionController(name: 'KeyedCounterStoreBase', context: context);
+  late final _$KeyedCounterStoreBaseActionController = ActionController(
+    name: 'KeyedCounterStoreBase',
+    context: context,
+  );
 
   @override
   void increment() {
     final _$actionInfo = _$KeyedCounterStoreBaseActionController.startAction(
-        name: 'KeyedCounterStoreBase.increment');
+      name: 'KeyedCounterStoreBase.increment',
+    );
     try {
       return super.increment();
     } finally {
@@ -42,7 +47,8 @@ mixin _$KeyedCounterStore on KeyedCounterStoreBase, Store {
   @override
   void decrement() {
     final _$actionInfo = _$KeyedCounterStoreBaseActionController.startAction(
-        name: 'KeyedCounterStoreBase.decrement');
+      name: 'KeyedCounterStoreBase.decrement',
+    );
     try {
       return super.decrement();
     } finally {

@@ -24,13 +24,16 @@ mixin _$CartStore on CartStoreBase, Store {
     });
   }
 
-  late final _$CartStoreBaseActionController =
-      ActionController(name: 'CartStoreBase', context: context);
+  late final _$CartStoreBaseActionController = ActionController(
+    name: 'CartStoreBase',
+    context: context,
+  );
 
   @override
   void add(String item) {
-    final _$actionInfo =
-        _$CartStoreBaseActionController.startAction(name: 'CartStoreBase.add');
+    final _$actionInfo = _$CartStoreBaseActionController.startAction(
+      name: 'CartStoreBase.add',
+    );
     try {
       return super.add(item);
     } finally {
@@ -62,13 +65,16 @@ mixin _$DraftStore on DraftStoreBase, Store {
     });
   }
 
-  late final _$DraftStoreBaseActionController =
-      ActionController(name: 'DraftStoreBase', context: context);
+  late final _$DraftStoreBaseActionController = ActionController(
+    name: 'DraftStoreBase',
+    context: context,
+  );
 
   @override
   void setText(String value) {
     final _$actionInfo = _$DraftStoreBaseActionController.startAction(
-        name: 'DraftStoreBase.setText');
+      name: 'DraftStoreBase.setText',
+    );
     try {
       return super.setText(value);
     } finally {
@@ -85,8 +91,10 @@ text: ${text}
 }
 
 mixin _$AccountPrefsStore on AccountPrefsStoreBase, Store {
-  late final _$visitsAtom =
-      Atom(name: 'AccountPrefsStoreBase.visits', context: context);
+  late final _$visitsAtom = Atom(
+    name: 'AccountPrefsStoreBase.visits',
+    context: context,
+  );
 
   @override
   int get visits {
@@ -101,8 +109,10 @@ mixin _$AccountPrefsStore on AccountPrefsStoreBase, Store {
     });
   }
 
-  late final _$compactModeAtom =
-      Atom(name: 'AccountPrefsStoreBase.compactMode', context: context);
+  late final _$compactModeAtom = Atom(
+    name: 'AccountPrefsStoreBase.compactMode',
+    context: context,
+  );
 
   @override
   bool get compactMode {
@@ -117,13 +127,16 @@ mixin _$AccountPrefsStore on AccountPrefsStoreBase, Store {
     });
   }
 
-  late final _$AccountPrefsStoreBaseActionController =
-      ActionController(name: 'AccountPrefsStoreBase', context: context);
+  late final _$AccountPrefsStoreBaseActionController = ActionController(
+    name: 'AccountPrefsStoreBase',
+    context: context,
+  );
 
   @override
   void countVisit() {
     final _$actionInfo = _$AccountPrefsStoreBaseActionController.startAction(
-        name: 'AccountPrefsStoreBase.countVisit');
+      name: 'AccountPrefsStoreBase.countVisit',
+    );
     try {
       return super.countVisit();
     } finally {
@@ -134,7 +147,8 @@ mixin _$AccountPrefsStore on AccountPrefsStoreBase, Store {
   @override
   void toggleCompact() {
     final _$actionInfo = _$AccountPrefsStoreBaseActionController.startAction(
-        name: 'AccountPrefsStoreBase.toggleCompact');
+      name: 'AccountPrefsStoreBase.toggleCompact',
+    );
     try {
       return super.toggleCompact();
     } finally {

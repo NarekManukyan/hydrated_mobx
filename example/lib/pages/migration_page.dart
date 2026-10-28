@@ -23,6 +23,11 @@ class MigrationPage extends StatefulWidget {
 class _MigrationPageState extends State<MigrationPage> {
   ProfileStore? _store;
   int? _seededVersion;
+  bool _seeding = false;
+
+  /// Completes once the store's first persistence run (which writes the
+  /// migrated state back) has landed.
+  Future<void>? _written;
 
   @override
   void dispose() {
@@ -34,14 +39,22 @@ class _MigrationPageState extends State<MigrationPage> {
   /// creates the store, which migrates it on hydration.
   Future<void> _seed(int version) async {
     _store?.dispose();
-    await HydratedMobX.deleteToken(kProfileToken);
-    await HydratedMobX.importData(
-      {kProfileToken: Map.of(_kLegacy[version]!)},
-      version: version,
-    );
     setState(() {
+      _seeding = true;
+      _store = null;
+      _written = null;
+    });
+    await HydratedMobX.deleteToken(kProfileToken);
+    await HydratedMobX.importData({
+      kProfileToken: Map.of(_kLegacy[version]!),
+    }, version: version);
+    if (!mounted) return;
+    final store = ProfileStore();
+    setState(() {
+      _seeding = false;
       _seededVersion = version;
-      _store = ProfileStore();
+      _store = store;
+      _written = store.flush();
     });
   }
 
@@ -51,7 +64,8 @@ class _MigrationPageState extends State<MigrationPage> {
     final storage = HydratedMobX.storage;
     return DemoPage(
       title: 'Schema migration',
-      explainer: 'ProfileStore is at version 3. Seed what an older build '
+      explainer:
+          'ProfileStore is at version 3. Seed what an older build '
           'wrote: v2 data has its "name" renamed to "displayName"; v1 data '
           'is too old, so migrate returns null and it is dropped.',
       children: [
@@ -61,7 +75,7 @@ class _MigrationPageState extends State<MigrationPage> {
             for (final version in _kLegacy.keys)
               FilledButton.tonal(
                 key: Key('seed_v$version'),
-                onPressed: () => _seed(version),
+                onPressed: _seeding ? null : () => _seed(version),
                 child: Text('Seed v$version data'),
               ),
           ],
@@ -94,9 +108,7 @@ class _MigrationPageState extends State<MigrationPage> {
               Text('bio: ${store.bio.isEmpty ? '(empty)' : store.bio}'),
               const SizedBox(height: 8),
               FutureBuilder<void>(
-                // The migrated state is written back by the store's first
-                // persistence run; flush waits for it.
-                future: store.flush(),
+                future: _written,
                 builder: (context, _) => Column(
                   children: [
                     KeyValueTile(

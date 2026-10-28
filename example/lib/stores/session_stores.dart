@@ -1,8 +1,6 @@
 import 'package:hydrated_mobx/hydrated_mobx.dart';
 import 'package:mobx/mobx.dart';
 
-import '../app/app_storages.dart';
-
 part 'session_stores.g.dart';
 
 const kDraftPrefix = 'draft_';
@@ -11,7 +9,7 @@ class CartStore = CartStoreBase with _$CartStore;
 
 /// Lives in the session box: gone after sign-out.
 abstract class CartStoreBase extends HydratedMobX with Store {
-  CartStoreBase() : super(storage: appStorages.session);
+  CartStoreBase(Storage storage) : super(storage: storage);
 
   @observable
   ObservableList<String> items = ObservableList();
@@ -36,7 +34,7 @@ class DraftStore = DraftStoreBase with _$DraftStore;
 /// A message draft, also in the session box, under a `draft_` key so it can
 /// be cleared on its own.
 abstract class DraftStoreBase extends HydratedMobX with Store {
-  DraftStoreBase() : super(storage: appStorages.session, storeId: 'compose');
+  DraftStoreBase(Storage storage) : super(storage: storage, storeId: 'compose');
 
   @observable
   String text = '';
@@ -60,7 +58,7 @@ class AccountPrefsStore = AccountPrefsStoreBase with _$AccountPrefsStore;
 
 /// Lives in the account box: survives sign-out.
 abstract class AccountPrefsStoreBase extends HydratedMobX with Store {
-  AccountPrefsStoreBase() : super(storage: appStorages.account);
+  AccountPrefsStoreBase(Storage storage) : super(storage: storage);
 
   @observable
   int visits = 0;
@@ -79,9 +77,9 @@ abstract class AccountPrefsStoreBase extends HydratedMobX with Store {
 
   @override
   Map<String, dynamic>? toJson() => {
-        'visits': visits,
-        'compactMode': compactMode,
-      };
+    'visits': visits,
+    'compactMode': compactMode,
+  };
 
   @override
   void fromJson(Map<String, dynamic> json) {

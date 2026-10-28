@@ -31,13 +31,13 @@ class AppStorages {
 
   /// In-memory storages, for widget tests.
   AppStorages.inMemory()
-      : this._(
-          main: CountingStorage(InMemoryStorage()),
-          session: InMemoryStorage(),
-          account: InMemoryStorage(),
-          recent: InMemoryStorage(),
-          vault: InMemoryStorage(),
-        );
+    : this._(
+        main: CountingStorage(InMemoryStorage()),
+        session: InMemoryStorage(),
+        account: InMemoryStorage(),
+        recent: InMemoryStorage(),
+        vault: InMemoryStorage(),
+      );
 
   /// The directory the Hive boxes live in; null in memory.
   final String? directory;
@@ -83,38 +83,63 @@ class AppStorages {
     );
   }
 
-  /// Closes and reopens the recent box, which runs its eviction again.
+  /// Closes and reopens the recent box, then evicts down to
+  /// [kRecentMaxEntries].
+  ///
+  /// The new box only tracks use at build. Evicting there would run before
+  /// the pinned note's store moves over, so a store whose key was evicted
+  /// would write it straight back; [HydratedStorage.evict] after
+  /// [HydratedMobX.rebindAll] suspends it instead.
   Future<void> rebuildRecent() async {
     final path = directory;
     if (path == null) return;
     final old = recent;
     await HydratedMobX.flushAll(storage: old);
     await old.close();
-    recent = await _buildRecent(HydratedStorageDirectory(path));
-    // Stores still open on the old box (the pinned note) carry on here.
-    HydratedMobX.rebindAll(from: old, to: recent);
+    final HydratedStorage rebuilt;
+    try {
+      rebuilt = await _buildRecent(
+        HydratedStorageDirectory(path),
+        evictAtBuild: false,
+      );
+    } catch (_) {
+      // Keep `recent` open, so the page and its stores still work.
+      recent = InMemoryStorage();
+      HydratedMobX.rebindAll(from: old, to: recent);
+      rethrow;
+    }
+    recent = rebuilt;
+    HydratedMobX.rebindAll(from: old, to: rebuilt);
+    await rebuilt.evict(
+      maxEntries: kRecentMaxEntries,
+      where: (key) => key.startsWith(kRecentPrefix),
+    );
   }
 
-  static Future<Storage> _buildRecent(HydratedStorageDirectory dir) =>
-      HydratedStorage.build(
-        storageDirectory: dir,
-        boxName: kRecentBox,
-        maxEntries: kRecentMaxEntries,
-        // Seconds, not the default minute, so a quick demo sees the order.
-        useResolution: const Duration(seconds: 1),
-        // Only the cache entries age out; the pinned note never does.
-        evictable: (key) => key.startsWith(kRecentPrefix),
-      );
+  /// At launch the box evicts as it opens; [rebuildRecent] evicts after.
+  static Future<HydratedStorage> _buildRecent(
+    HydratedStorageDirectory dir, {
+    bool evictAtBuild = true,
+  }) => HydratedStorage.build(
+    storageDirectory: dir,
+    boxName: kRecentBox,
+    trackUse: true,
+    maxEntries: evictAtBuild ? kRecentMaxEntries : null,
+    // Seconds, not the default minute, so a quick demo sees the order.
+    useResolution: const Duration(seconds: 1),
+    // Only the cache entries age out; the pinned note never does.
+    evictable: (key) => key.startsWith(kRecentPrefix),
+  );
 
   /// Every storage by display name, for the inspector. Getters, since the
   /// recent box is replaced when it is rebuilt.
   Map<String, Storage Function()> get all => {
-        'main (hydrated_box)': () => main,
-        kSessionBox: () => session,
-        kAccountBox: () => account,
-        kRecentBox: () => recent,
-        kVaultBox: () => vault,
-      };
+    'main (hydrated_box)': () => main,
+    kSessionBox: () => session,
+    kAccountBox: () => account,
+    kRecentBox: () => recent,
+    kVaultBox: () => vault,
+  };
 }
 
 /// Set in `main` before `runApp`.

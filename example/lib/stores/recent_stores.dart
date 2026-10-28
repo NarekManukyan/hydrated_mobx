@@ -9,8 +9,8 @@ class RecentItemStore = RecentItemStoreBase with _$RecentItemStore;
 
 /// One cached item per id (`recent_<id>`) in the capped recent box.
 abstract class RecentItemStoreBase extends HydratedMobX with Store {
-  RecentItemStoreBase(String id)
-      : super(storeId: id, storage: appStorages.recent);
+  RecentItemStoreBase(String storeId, Storage storage)
+    : super(storeId: storeId, storage: storage);
 
   @observable
   int views = 0;
@@ -42,7 +42,7 @@ class PinnedNoteStore = PinnedNoteStoreBase with _$PinnedNoteStore;
 /// Shares the recent box but is never evicted: `evictable` only accepts
 /// `recent_` keys.
 abstract class PinnedNoteStoreBase extends HydratedMobX with Store {
-  PinnedNoteStoreBase() : super(storage: appStorages.recent);
+  PinnedNoteStoreBase(Storage storage) : super(storage: storage);
 
   @observable
   String text = 'Pinned: never evicted';

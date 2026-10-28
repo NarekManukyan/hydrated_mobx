@@ -9,7 +9,9 @@ import 'pages/home_page.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  final directory = await getApplicationDocumentsDirectory();
+  // An app upgrading from 1.x keeps the directory it used before (the 1.x
+  // docs used Documents); a new one opens an empty box.
+  final directory = await getApplicationSupportDirectory();
   appStorages = await AppStorages.build(directory.path);
   // The default storage for stores built without `storage:`.
   HydratedMobX.storage = appStorages.main;
@@ -29,12 +31,12 @@ class HydratedMobXExampleApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     ThemeData theme(Brightness brightness) => ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: Colors.deepPurple,
-            brightness: brightness,
-          ),
-          useMaterial3: true,
-        );
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Colors.deepPurple,
+        brightness: brightness,
+      ),
+      useMaterial3: true,
+    );
     return MaterialApp(
       title: 'hydrated_mobx',
       debugShowCheckedModeBanner: false,

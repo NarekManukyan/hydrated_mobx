@@ -19,9 +19,9 @@ class CountingStorage extends ForwardingStorage {
   int writesOf(String key) => writes[key] ?? 0;
 
   void resetStats() => runInAction(() {
-        writes.clear();
-        bytes.clear();
-      });
+    writes.clear();
+    bytes.clear();
+  });
 
   @override
   Future<void> write(String key, dynamic value) async {

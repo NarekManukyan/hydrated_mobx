@@ -17,9 +17,9 @@ class NamespacesPage extends StatefulWidget {
 }
 
 class _NamespacesPageState extends State<NamespacesPage> {
-  late CartStore _cart = CartStore();
-  late DraftStore _draft = DraftStore();
-  final _prefs = AccountPrefsStore()..countVisit();
+  late CartStore _cart = CartStore(appStorages.session);
+  late DraftStore _draft = DraftStore(appStorages.session);
+  final _prefs = AccountPrefsStore(appStorages.account)..countVisit();
   late final _draftText = TextEditingController(text: _draft.text);
 
   @override
@@ -37,9 +37,10 @@ class _NamespacesPageState extends State<NamespacesPage> {
     await HydratedMobX.clearAll(storage: appStorages.session);
     _cart.dispose();
     _draft.dispose();
+    if (!mounted) return;
     setState(() {
-      _cart = CartStore();
-      _draft = DraftStore();
+      _cart = CartStore(appStorages.session);
+      _draft = DraftStore(appStorages.session);
       _draftText.text = _draft.text;
     });
   }
@@ -51,8 +52,9 @@ class _NamespacesPageState extends State<NamespacesPage> {
       where: (token) => token.startsWith(kDraftPrefix),
     );
     _draft.dispose();
+    if (!mounted) return;
     setState(() {
-      _draft = DraftStore();
+      _draft = DraftStore(appStorages.session);
       _draftText.text = _draft.text;
     });
   }
@@ -61,7 +63,8 @@ class _NamespacesPageState extends State<NamespacesPage> {
   Widget build(BuildContext context) {
     return DemoPage(
       title: 'Namespaces',
-      explainer: 'Two boxes: "session" (cart, draft) and "account" '
+      explainer:
+          'Two boxes: "session" (cart, draft) and "account" '
           '(preferences). Each store is bound with storage:. Signing out '
           'clears one box in a single call; the other is never touched.',
       children: [

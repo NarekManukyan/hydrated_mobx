@@ -33,7 +33,8 @@ class ObserverPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return DemoPage(
       title: 'Observer & errors',
-      explainer: 'One HydratedObserver, set at startup, receives the '
+      explainer:
+          'One HydratedObserver, set at startup, receives the '
           'failures of every store that has no handler of its own, and '
           'hears about migrations. No per-store error callbacks needed.',
       children: [
@@ -96,15 +97,15 @@ class _LogTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final (icon, color, label) = switch (entry.kind) {
       LogKind.hydrationError => (
-          Icons.error_outline,
-          scheme.error,
-          'onHydrationError'
-        ),
+        Icons.error_outline,
+        scheme.error,
+        'onHydrationError',
+      ),
       LogKind.storageError => (
-          Icons.warning_amber,
-          scheme.tertiary,
-          'onStorageError'
-        ),
+        Icons.warning_amber,
+        scheme.tertiary,
+        'onStorageError',
+      ),
       LogKind.migration => (Icons.upgrade, scheme.primary, 'onMigrate'),
     };
     return ListTile(
@@ -112,8 +113,11 @@ class _LogTile extends StatelessWidget {
       contentPadding: EdgeInsets.zero,
       leading: Icon(icon, color: color),
       title: Text('$label · ${entry.token}'),
-      subtitle:
-          Text(entry.message, maxLines: 3, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+        entry.message,
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+      ),
     );
   }
 }

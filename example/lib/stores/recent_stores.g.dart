@@ -9,8 +9,10 @@ part of 'recent_stores.dart';
 // ignore_for_file: non_constant_identifier_names, unnecessary_brace_in_string_interps, unnecessary_lambdas, prefer_expression_function_bodies, lines_longer_than_80_chars, avoid_as, avoid_annotating_with_dynamic, no_leading_underscores_for_local_identifiers
 
 mixin _$RecentItemStore on RecentItemStoreBase, Store {
-  late final _$viewsAtom =
-      Atom(name: 'RecentItemStoreBase.views', context: context);
+  late final _$viewsAtom = Atom(
+    name: 'RecentItemStoreBase.views',
+    context: context,
+  );
 
   @override
   int get views {
@@ -25,8 +27,10 @@ mixin _$RecentItemStore on RecentItemStoreBase, Store {
     });
   }
 
-  late final _$lastViewedAtom =
-      Atom(name: 'RecentItemStoreBase.lastViewed', context: context);
+  late final _$lastViewedAtom = Atom(
+    name: 'RecentItemStoreBase.lastViewed',
+    context: context,
+  );
 
   @override
   String? get lastViewed {
@@ -41,13 +45,16 @@ mixin _$RecentItemStore on RecentItemStoreBase, Store {
     });
   }
 
-  late final _$RecentItemStoreBaseActionController =
-      ActionController(name: 'RecentItemStoreBase', context: context);
+  late final _$RecentItemStoreBaseActionController = ActionController(
+    name: 'RecentItemStoreBase',
+    context: context,
+  );
 
   @override
   void view() {
     final _$actionInfo = _$RecentItemStoreBaseActionController.startAction(
-        name: 'RecentItemStoreBase.view');
+      name: 'RecentItemStoreBase.view',
+    );
     try {
       return super.view();
     } finally {
@@ -65,8 +72,10 @@ lastViewed: ${lastViewed}
 }
 
 mixin _$PinnedNoteStore on PinnedNoteStoreBase, Store {
-  late final _$textAtom =
-      Atom(name: 'PinnedNoteStoreBase.text', context: context);
+  late final _$textAtom = Atom(
+    name: 'PinnedNoteStoreBase.text',
+    context: context,
+  );
 
   @override
   String get text {

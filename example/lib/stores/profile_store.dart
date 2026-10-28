@@ -20,12 +20,6 @@ abstract class ProfileStoreBase extends HydratedMobX with Store {
   @observable
   String bio = '';
 
-  @action
-  void update({String? displayName, String? bio}) {
-    if (displayName != null) this.displayName = displayName;
-    if (bio != null) this.bio = bio;
-  }
-
   @override
   String get storagePrefix => kProfileToken;
 
@@ -33,10 +27,7 @@ abstract class ProfileStoreBase extends HydratedMobX with Store {
   int get version => 3;
 
   @override
-  Map<String, dynamic>? migrate(
-    int oldVersion,
-    Map<String, dynamic> oldState,
-  ) {
+  Map<String, dynamic>? migrate(int oldVersion, Map<String, dynamic> oldState) {
     if (oldVersion < 2) return null;
     if (oldVersion < 3) oldState['displayName'] = oldState.remove('name');
     return oldState;

@@ -27,7 +27,8 @@ class _CounterPageState extends State<CounterPage> {
     final theme = Theme.of(context);
     return DemoPage(
       title: 'Counter',
-      explainer: 'A store that persists itself. Tap fast: changes within '
+      explainer:
+          'A store that persists itself. Tap fast: changes within '
           '${kCounterPersistDelay.inMilliseconds} ms are written once. '
           'Kill the app and reopen it — the count is still here.',
       children: [

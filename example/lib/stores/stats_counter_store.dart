@@ -8,8 +8,10 @@ class StatsCounterStore = StatsCounterStoreBase with _$StatsCounterStore;
 /// A counter whose writes the stats page counts, built with or without a
 /// `persistDelay`.
 abstract class StatsCounterStoreBase extends HydratedMobX with Store {
-  StatsCounterStoreBase({required String id, required Duration persistDelay})
-      : super(storeId: id, persistDelay: persistDelay);
+  StatsCounterStoreBase({
+    required String super.storeId,
+    required Duration super.persistDelay,
+  });
 
   @observable
   int count = 0;
