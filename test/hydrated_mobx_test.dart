@@ -1,4 +1,5 @@
-// ignore_for_file: avoid_catching_errors
+// Fixture getters are API for the tests, not all read by them.
+// ignore_for_file: avoid_catching_errors, unreachable_from_main
 
 import 'dart:convert' show utf8;
 import 'dart:io';
@@ -283,10 +284,9 @@ void main() {
       HydratedMobX.storage = mem;
       await mem.write('CorruptStore', {'value': 42});
 
-      final store = CorruptStore(
+      CorruptStore(
         onHydrationError: (_, __) => HydrationErrorBehavior.retain,
-      );
-      store.value = 7;
+      ).value = 7;
       await settle();
 
       // Original seeded value must be unchanged — writes are blocked.
@@ -453,8 +453,7 @@ void main() {
       final mem = InMemoryStorage();
       HydratedMobX.storage = mem;
 
-      final store = NestedStore();
-      store.setData({
+      NestedStore().setData({
         'nums': [1, 2, 3],
         'nested': {'flag': true, 'label': 'hello'},
       });
@@ -472,8 +471,7 @@ void main() {
       HydratedMobX.storage = mem;
 
       // Construction triggers the initial autorun with inner = Inner(0).
-      final store = CustomObjectStore();
-      store.inner = Inner(42);
+      CustomObjectStore().inner = Inner(42);
       await settle();
 
       final stored = mem.read('CustomObjectStore') as Map?;
