@@ -46,9 +46,14 @@ class _EvictionPageState extends State<EvictionPage> {
       await appStorages.rebuildRecent();
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Rebuild failed: $error')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Rebuild failed: $error. Recent items now live in memory '
+              'only and are lost on the next rebuild or restart.',
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _rebuilding = false);

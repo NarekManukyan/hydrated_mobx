@@ -71,7 +71,11 @@ class _EncryptionPageState extends State<EncryptionPage> {
             TextField(
               key: const Key('vault_field'),
               controller: _text,
-              onChanged: _store.setText,
+              onChanged: (text) {
+                _store.setText(text);
+                // The last check was for the old text.
+                if (_check != null) setState(() => _check = null);
+              },
               decoration: const InputDecoration(
                 border: OutlineInputBorder(),
                 hintText: 'Type something secret…',

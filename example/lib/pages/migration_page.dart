@@ -44,10 +44,15 @@ class _MigrationPageState extends State<MigrationPage> {
       _store = null;
       _written = null;
     });
-    await HydratedMobX.deleteToken(kProfileToken);
-    await HydratedMobX.importData({
-      kProfileToken: Map.of(_kLegacy[version]!),
-    }, version: version);
+    try {
+      await HydratedMobX.deleteToken(kProfileToken);
+      await HydratedMobX.importData({
+        kProfileToken: Map.of(_kLegacy[version]!),
+      }, version: version);
+    } catch (_) {
+      if (mounted) setState(() => _seeding = false);
+      rethrow;
+    }
     if (!mounted) return;
     final store = ProfileStore();
     setState(() {
