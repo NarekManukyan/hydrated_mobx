@@ -8,15 +8,18 @@ Future<void> settle() async {
 }
 
 /// An [InMemoryStorage] that records the key of every write, and can be told
-/// to fail them.
+/// to fail them, all or those of [failKeys].
 class RecordingStorage extends InMemoryStorage {
   final writes = <String>[];
+  final failKeys = <String>{};
   bool failWrites = false;
 
   @override
   Future<void> write(String key, dynamic value) {
     writes.add(key);
-    if (failWrites) return Future.error(Exception('write failed'));
+    if (failWrites || failKeys.contains(key)) {
+      return Future.error(Exception('write failed'));
+    }
     return super.write(key, value);
   }
 }

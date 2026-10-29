@@ -784,6 +784,47 @@ void main() {
       expect(storage.read('counter.__version'), isNull);
     });
 
+    test('a failed importData overwrite leaves no state under the new version',
+        () async {
+      await storage.write('counter', {'count': 1});
+      storage.failKeys.add('counter');
+
+      await expectLater(
+        HydratedMobX.importData(
+          {
+            'counter': {'count': 9},
+          },
+          overwrite: true,
+          version: 3,
+        ),
+        throwsException,
+      );
+
+      expect(storage.read('counter'), isNull);
+    });
+
+    test('a negative age is rejected', () async {
+      final dir = await Directory.systemTemp.createTemp('hydrated_v2_');
+      addTearDown(() => dir.delete(recursive: true));
+      expect(
+        () => HydratedStorage.build(
+          storageDirectory: HydratedStorageDirectory(dir.path),
+          maxAge: const Duration(days: -1),
+        ),
+        throwsArgumentError,
+      );
+      final disk = await HydratedStorage.build(
+        storageDirectory: HydratedStorageDirectory(dir.path),
+        trackUse: true,
+      );
+      addTearDown(disk.close);
+
+      expect(
+        () => disk.evict(olderThan: const Duration(days: -1)),
+        throwsArgumentError,
+      );
+    });
+
     test('a throwing onMigrate keeps the migrated state', () async {
       HydratedMobX.observer = _ThrowingMigrateObserver();
       await storage.write('migrating', {'old': 4});

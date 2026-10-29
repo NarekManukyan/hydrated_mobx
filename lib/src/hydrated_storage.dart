@@ -210,6 +210,9 @@ class HydratedStorage implements UseTrackingStorage {
     HydratedCompactionStrategy? compactionStrategy,
     @visibleForTesting DateTime Function() clock = DateTime.now,
   }) {
+    if (maxAge != null && maxAge.isNegative) {
+      throw ArgumentError.value(maxAge, 'maxAge', 'must not be negative');
+    }
     if (boxName.endsWith(_metaBoxSuffix)) {
       throw ArgumentError.value(
         boxName,
@@ -378,6 +381,9 @@ class HydratedStorage implements UseTrackingStorage {
   }) async {
     if (maxEntries != null && maxEntries < 0) {
       throw ArgumentError.value(maxEntries, 'maxEntries', 'must be >= 0');
+    }
+    if (olderThan != null && olderThan.isNegative) {
+      throw ArgumentError.value(olderThan, 'olderThan', 'must not be negative');
     }
     final meta = _meta;
     if (meta == null) {

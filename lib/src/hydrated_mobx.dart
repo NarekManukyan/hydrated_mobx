@@ -142,10 +142,12 @@ abstract class HydratedMobX with Store {
   }) async {
     final target = storage ?? HydratedMobX.storage;
     for (final entry in data.entries) {
-      if (!overwrite && target.read(entry.key) != null) continue;
-      // The version first: a crash before the state is written leaves a
-      // version with nothing to hydrate, which is harmless, rather than state
-      // that a later import skips and then migrates as the wrong version.
+      final existing = target.read(entry.key) != null;
+      if (!overwrite && existing) continue;
+      // Old state goes, then the version, then the new state: an interruption
+      // leaves nothing to hydrate, which is harmless, never state under a
+      // version it was not written in.
+      if (existing) await target.delete(entry.key);
       final versionKey = versionKeyOf(entry.key);
       if (version > 1) {
         await target.write(versionKey, version);
