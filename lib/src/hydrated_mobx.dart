@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:developer';
 
 import 'package:hydrated_mobx/src/hydrated_storage.dart';
+import 'package:hydrated_mobx/src/plain_json.dart';
 import 'package:meta/meta.dart';
 import 'package:mobx/mobx.dart';
 
@@ -11,16 +12,15 @@ import 'package:mobx/mobx.dart';
 /// An abstract class which enables automatic state persistence for classes
 /// using [Store]. State can be persisted across hot restarts and app restarts.
 ///
-/// To use HydratedMobX, extend this class and implement the required methods:
-/// - [toJson] - Converts the store state to a JSON representation
-/// - [fromJson] - Restores the store state from a JSON representation
+/// To use HydratedMobX, extend this class and implement:
+/// - [storagePrefix] - a fixed name for the store's key on disk
+/// - [toJson] - converts the store state to a JSON representation
+/// - [fromJson] - restores the store state from a JSON representation
 ///
 /// Example:
 /// ```dart
 /// class CounterStore extends HydratedMobX with Store {
-///   CounterStore() {
-///     hydrate();
-///   }
+///   CounterStore() : super();
 ///
 ///   @observable
 ///   int count = 0;
@@ -28,8 +28,8 @@ import 'package:mobx/mobx.dart';
 ///   @action
 ///   void increment() => count++;
 ///
-///   @action
-///   void decrement() => count--;
+///   @override
+///   String get storagePrefix => 'counter';
 ///
 ///   @override
 ///   Map<String, dynamic>? toJson() => {'count': count};
@@ -41,56 +41,89 @@ import 'package:mobx/mobx.dart';
 /// }
 /// ```
 ///
-/// The store will automatically persist its state whenever it changes.
-/// The state will be restored when the store is initialized.
+/// The store hydrates in its constructor, before the subclass constructor
+/// body runs, so [fromJson] and [toJson] may only use fields assigned by
+/// initializers (`this.x` parameters, field initializers, initializer lists).
 ///
+/// The store then persists its state whenever it changes: right away, or
+/// coalesced over `persistDelay` when one is set. A change that leaves
+/// [toJson] equal to what was last written is not written again.
 /// {@endtemplate}
-
 abstract class HydratedMobX with Store {
   /// Creates a new instance and hydrates its state.
   ///
-  /// Optional [storeId]: use for per-instance storage (e.g. per meeting).
-  /// Forward with `super(storeId: meetingId)` so the correct key is used.
-  ///
-  /// Optional [onHydrationError]: invoked when hydration fails. See
-  /// [HydrationErrorBehavior] for how the returned value affects persistence.
-  ///
-  /// Optional [onStorageError]: invoked when persisting a state change fails
-  /// (e.g. the disk is full or encryption fails). Defaults to
-  /// [defaultOnStorageError], which logs the error.
+  /// - [storeId] gives one instance its own key, e.g. per conversation.
+  /// - [storage] binds the store to a storage other than the global
+  ///   [HydratedMobX.storage], e.g. a second namespace or a test double.
+  /// - [onHydrationError] and [onStorageError] handle this store's failures;
+  ///   when omitted, [HydratedMobX.observer] handles them.
+  /// - [persistDelay] coalesces the writes of changes made within that window
+  ///   into one; defaults to [HydratedMobX.defaultPersistDelay].
   HydratedMobX({
     String? storeId,
-    OnHydrationError onHydrationError = defaultOnHydrationError,
-    OnStorageError onStorageError = defaultOnStorageError,
-  }) : _constructorStorageId = storeId {
-    hydrate(onHydrationError: onHydrationError, onStorageError: onStorageError);
+    Storage? storage,
+    OnHydrationError? onHydrationError,
+    OnStorageError? onStorageError,
+    Duration? persistDelay,
+  })  : _constructorStorageId = storeId,
+        _persistDelay = persistDelay,
+        _onHydrationError = onHydrationError,
+        _onStorageError = onStorageError {
+    hydrate(storage: storage);
   }
 
-  final String? _constructorStorageId;
-
-  late OnStorageError _onStorageError;
+  // ---------------------------------------------------------------------------
+  // Global configuration
+  // ---------------------------------------------------------------------------
 
   static Storage? _storage;
 
-  /// Setter for instance of [Storage] which will be used to
-  /// manage persisting/restoring the store state.
+  /// Sets the [Storage] that stores use when none is passed to them.
   static set storage(Storage? storage) => _storage = storage;
 
-  /// Instance of [Storage] which will be used to
-  /// manage persisting/restoring the store state.
+  /// The [Storage] that stores use when none is passed to them.
   static Storage get storage {
     if (_storage == null) throw const StorageNotFound();
     return _storage!;
   }
 
-  /// Seeds hydrated [storage] with pre-existing [data] imported from another
-  /// persistence layer (e.g. `SharedPreferences`, a legacy Hive box, or a
-  /// previous key scheme).
+  /// Handles hydration and persistence failures of every store that was not
+  /// given its own handler. Set it once at startup, e.g. to forward errors to
+  /// a crash reporter.
+  static HydratedObserver observer = const HydratedObserver();
+
+  /// The `persistDelay` of a store constructed without one.
   ///
-  /// [data] maps each [storageToken] to the JSON that a store of that token
-  /// should hydrate from. Keys therefore follow the same
-  /// `'$storagePrefix${storeId ?? id}'` composition used by [storageToken] —
-  /// include the `storeId`/`id` component when the target store overrides it.
+  /// [Duration.zero] (the default) writes each change right away.
+  static Duration defaultPersistDelay = Duration.zero;
+
+  /// Suffix appended to a [storageToken] to form the key under which the
+  /// persisted schema [version] is stored.
+  static const versionKeySuffix = '.__version';
+
+  /// The key holding the schema version of the state stored under [token].
+  static String versionKeyOf(String token) => '$token$versionKeySuffix';
+
+  /// Whether [key] holds a schema version rather than state.
+  static bool isVersionKey(String key) => key.endsWith(versionKeySuffix);
+
+  /// The [storageToken] a raw storage [key] belongs to: the key itself, or
+  /// the token a version key was stamped for.
+  static String tokenOfKey(String key) => isVersionKey(key)
+      ? key.substring(0, key.length - versionKeySuffix.length)
+      : key;
+
+  // ---------------------------------------------------------------------------
+  // Global operations
+  // ---------------------------------------------------------------------------
+
+  /// Seeds [storage] (the global one by default) with pre-existing [data]
+  /// imported from another persistence layer (e.g. `SharedPreferences`, a
+  /// legacy Hive box, or a previous key scheme).
+  ///
+  /// [data] maps each [storageToken] to the JSON a store of that token should
+  /// hydrate from, so keys follow the same `'$storagePrefix${storeId ?? id}'`
+  /// composition.
   ///
   /// [version] is the schema version the imported payloads are already in; it
   /// is recorded so that a store whose [HydratedMobX.version] is higher does
@@ -98,66 +131,211 @@ abstract class HydratedMobX with Store {
   /// the default (`1`) when importing legacy version-1 data that should be
   /// migrated forward.
   ///
-  /// By default, existing keys are left untouched so already-hydrated state is
-  /// never clobbered; pass `overwrite: true` to replace them.
+  /// Existing keys are left untouched unless [overwrite] is `true`.
   ///
-  /// Call this after [storage] has been assigned and before constructing the
-  /// stores that should pick the data up:
-  ///
-  /// ```dart
-  /// HydratedMobX.storage = await HydratedStorage.build(...);
-  /// await HydratedMobX.importData({
-  ///   'CounterStore': {'count': legacyPrefs.getInt('count') ?? 0},
-  /// });
-  /// final store = CounterStore(); // hydrates from the seeded data
-  /// ```
+  /// Call this before constructing the stores that should pick the data up.
   static Future<void> importData(
     Map<String, Map<String, dynamic>> data, {
     bool overwrite = false,
     int version = 1,
+    Storage? storage,
   }) async {
-    final store = HydratedMobX.storage;
+    final target = storage ?? HydratedMobX.storage;
     for (final entry in data.entries) {
-      if (!overwrite && store.read(entry.key) != null) continue;
-      await store.write(entry.key, entry.value);
+      final existing = target.read(entry.key) != null;
+      if (!overwrite && existing) continue;
+      // Old state goes, then the version, then the new state: an interruption
+      // leaves nothing to hydrate, which is harmless, never state under a
+      // version it was not written in.
+      if (existing) await target.delete(entry.key);
+      final versionKey = versionKeyOf(entry.key);
       if (version > 1) {
-        await store.write('${entry.key}$_versionKeySuffix', version);
+        await target.write(versionKey, version);
+      } else {
+        // An absent key reads as version 1; drop one a newer build stamped.
+        await target.delete(versionKey);
+      }
+      await target.write(entry.key, entry.value);
+    }
+  }
+
+  /// Wipes persisted state from [storage] (the global one by default).
+  ///
+  /// Every live store bound to [storage] whose [storageToken] passes [where]
+  /// (all of them when [where] is `null`) stops persisting first, so none of
+  /// them writes its state back, and any write it had pending is dropped.
+  ///
+  /// - With [where] `null`, the whole storage is cleared.
+  /// - Otherwise only the keys whose token passes [where] are deleted, in one
+  ///   [Storage.deleteAll], with their version keys; every other key is left
+  ///   untouched. Keys that no store owns are tested by their raw name.
+  ///
+  /// With [resume] `true`, the suspended stores start persisting again
+  /// afterwards and write their current state back.
+  static Future<void> clearAll({
+    Storage? storage,
+    bool Function(String token)? where,
+    bool resume = false,
+  }) async {
+    final target = storage ?? HydratedMobX.storage;
+    final affected = [
+      for (final store in _live(target))
+        if (where == null || where(store.storageToken)) store,
+    ];
+    for (final store in affected) {
+      store._suspend();
+    }
+    if (where == null) {
+      await target.clear();
+    } else {
+      await target.deleteAll([
+        for (final key in target.keys)
+          if (where(tokenOfKey(key))) key,
+      ]);
+    }
+    if (resume) {
+      for (final store in affected) {
+        if (store._selfRef != null) store._startPersisting();
       }
     }
   }
 
-  late Storage __storage;
+  /// Deletes the state stored under [token], and its version key, from
+  /// [storage] (the global one by default). A live store with that token
+  /// stops persisting.
+  static Future<void> deleteToken(String token, {Storage? storage}) =>
+      clearAll(storage: storage, where: (t) => t == token);
 
-  /// Registry of live instances so [Storage]-level clears can reach every
-  /// store's persistence reaction before the underlying box is wiped.
+  /// Writes the pending state of every live store bound to [storage] (all
+  /// stores when `null`) now, instead of when its `persistDelay` ends.
+  ///
+  /// Call it when the app goes to the background, so a coalesced change is
+  /// not lost if the process is killed there.
+  static Future<void> flushAll({Storage? storage}) =>
+      Future.wait([for (final store in _live(storage)) store.flush()]);
+
+  /// Moves every live store bound to [from] onto [to], e.g. after closing a
+  /// storage and building it again. Their state is not read again; each
+  /// store writes its current state to [to] on its next change.
+  ///
+  /// Call [flushAll] for [from] before closing it, so no pending write is
+  /// lost.
+  ///
+  /// [to] built with `maxAge` or `maxEntries` evicts before the stores move
+  /// over, so a store whose key it evicted would write it back. Build [to]
+  /// with `trackUse: true` instead, rebind, then call `evict`.
+  static void rebindAll({required Storage from, required Storage to}) {
+    for (final store in _live(from, throughWrappers: false)) {
+      store
+        .._boundStorage = to
+        .._forgetPersisted();
+    }
+  }
+
+  /// Stops every live store bound to [storage] (all stores when `null`) from
+  /// persisting and drops its pending write.
+  ///
+  /// A [Storage] implementation calls this with itself from [Storage.clear]
+  /// before wiping, so no store writes cleared state back.
+  static void suspendAll({Storage? storage}) {
+    for (final store in _live(storage)) {
+      store._suspend();
+    }
+  }
+
+  /// Registry of live instances, so storage-wide operations can reach every
+  /// store's persistence reaction.
   ///
   /// Entries are [WeakReference]s so the registry never keeps a store alive on
-  /// its own: while a store is persisting it is kept reachable by its active
-  /// MobX reaction, but once that reaction is disposed (via [clear], [dispose],
-  /// or [disposeAllForClear]) the store becomes eligible for garbage collection
-  /// and [_finalizer] prunes its (now-dead) entry automatically.
+  /// its own: a persisting store is kept reachable by its MobX reaction, and
+  /// once that is disposed the store can be collected and [_finalizer] prunes
+  /// its entry.
   static final Set<WeakReference<HydratedMobX>> _instances =
       <WeakReference<HydratedMobX>>{};
 
-  /// Prunes a store's registry entry once the store has been collected.
   static final Finalizer<WeakReference<HydratedMobX>> _finalizer =
       Finalizer<WeakReference<HydratedMobX>>(_instances.remove);
+
+  /// Live stores bound to [storage], or all of them when it is `null`.
+  /// With [throughWrappers], a store bound to a [ForwardingStorage] that
+  /// wraps [storage] counts too, since it writes into [storage].
+  /// Prunes dead registry entries along the way.
+  static List<HydratedMobX> _live(
+    Storage? storage, {
+    bool throughWrappers = true,
+  }) {
+    bool writesInto(Storage? bound) {
+      for (var s = bound; s != null;) {
+        if (identical(s, storage)) return true;
+        s = throughWrappers && s is ForwardingStorage ? s.inner : null;
+      }
+      return false;
+    }
+
+    final live = <HydratedMobX>[];
+    _instances.removeWhere((ref) {
+      final store = ref.target;
+      if (store == null) return true;
+      if (storage == null || writesInto(store._boundStorage)) live.add(store);
+      return false;
+    });
+    return live;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Instance state
+  // ---------------------------------------------------------------------------
+
+  final String? _constructorStorageId;
+  final Duration? _persistDelay;
+  OnHydrationError? _onHydrationError;
+  OnStorageError? _onStorageError;
+
+  /// The storage this store is bound to; set by the first [hydrate].
+  Storage? _boundStorage;
 
   WeakReference<HydratedMobX>? _selfRef;
   ReactionDisposer? _persistDisposer;
   int _clearGeneration = 0;
   HydrationErrorBehavior _behavior = HydrationErrorBehavior.overwrite;
 
-  /// The schema [version] currently recorded on disk for this store, tracked so
-  /// the version key is stamped once (after the state write) rather than on
-  /// every state change. `null` means no version has been recorded yet.
+  /// The schema [version] recorded on disk for this store, so the version key
+  /// is stamped once (after the state write) rather than on every change.
+  /// `null` means no version has been recorded yet.
   int? _lastStampedVersion;
 
-  /// Suffix appended to a [storageToken] to form the key under which the
-  /// persisted schema [version] is stored.
-  static const _versionKeySuffix = '.__version';
+  /// The JSON last written or hydrated, to skip writing an unchanged state.
+  /// `null` when the next run must write.
+  Object? _lastPersisted;
 
-  /// Registers this instance in [_instances] exactly once.
+  /// The persistence run waiting for `persistDelay` to end, and its timer.
+  ({Timer timer, void Function() run})? _pending;
+
+  /// Completes when the latest write has finished, successfully or not.
+  Future<void> _lastWrite = Future<void>.value();
+
+  /// Deep equality of two JSON values that stops at the first difference.
+  /// Cheaper than a general deep equality: map order is ignored only by
+  /// looking keys up, never by hashing whole collections.
+  static bool _jsonEquals(Object? a, Object? b) {
+    if (identical(a, b)) return true;
+    if (a is Map && b is Map) {
+      if (a.length != b.length) return false;
+      for (final MapEntry(:key, :value) in a.entries) {
+        if (!b.containsKey(key) || !_jsonEquals(value, b[key])) return false;
+      }
+      return true;
+    }
+    if (a is List && b is List) {
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (!_jsonEquals(a[i], b[i])) return false;
+      }
+      return true;
+    }
+    return a == b;
+  }
+
   void _register() {
     if (_selfRef != null) return;
     final ref = _selfRef = WeakReference<HydratedMobX>(this);
@@ -165,178 +343,274 @@ abstract class HydratedMobX with Store {
     _finalizer.attach(this, ref, detach: this);
   }
 
-  /// Disposes the persistence reactions of every live [HydratedMobX] instance
-  /// and bumps their clear generation so any in-flight write scheduled by an
-  /// autorun is dropped instead of resurrecting cleared state. Dead registry
-  /// entries are pruned along the way.
-  ///
-  /// Intended to be called by [Storage] implementations from inside their
-  /// `clear()` before wiping the backing store.
-  @internal
-  static void disposeAllForClear() {
-    _instances.removeWhere((ref) {
-      final instance = ref.target;
-      if (instance == null) return true;
-      instance._suspendForClear();
-      return false;
-    });
+  /// Stops persisting ahead of a wipe: drops the reaction and the pending
+  /// run, and bumps the clear generation so any in-flight write (state or
+  /// version) scheduled before the wipe is discarded.
+  void _suspend() {
+    _clearGeneration++;
+    _stopPersisting();
+    _forgetPersisted();
   }
 
-  /// Drops this instance's persistence reaction and in-memory version stamp
-  /// ahead of a wipe, bumping the clear generation so any in-flight write
-  /// (state or version) scheduled before the clear is discarded.
-  void _suspendForClear() {
-    _clearGeneration++;
+  /// Drops the persistence reaction and its pending run.
+  void _stopPersisting() {
+    _cancelPending();
     _persistDisposer?.call();
     _persistDisposer = null;
-    // The box (version keys included) is about to be wiped, so drop the
-    // in-memory stamp too, matching instance clear().
-    _lastStampedVersion = null;
   }
 
-  /// Populates the internal state storage with the latest state.
-  /// This should be called in the constructor of the class using the mixin.
+  /// Forgets what is on disk, so the next run writes (and stamps) again.
+  void _forgetPersisted() {
+    _lastStampedVersion = null;
+    _lastPersisted = null;
+  }
+
+  void _cancelPending() {
+    _pending?.timer.cancel();
+    _pending = null;
+  }
+
+  void _reportStorageError(Object error, StackTrace stackTrace) {
+    final handler = _onStorageError;
+    if (handler != null) {
+      handler(error, stackTrace);
+    } else {
+      observer.onStorageError(this, error, stackTrace);
+    }
+  }
+
+  HydrationErrorBehavior _reportHydrationError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    final handler = _onHydrationError;
+    return handler != null
+        ? handler(error, stackTrace)
+        : observer.onHydrationError(this, error, stackTrace);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Hydration and persistence
+  // ---------------------------------------------------------------------------
+
+  /// Reads this store's state from storage and starts persisting changes.
+  /// The constructor calls it; call it again to re-read the stored state.
   ///
-  /// [onHydrationError] is invoked when hydration fails. The returned
-  /// [HydrationErrorBehavior] determines whether subsequent state changes
-  /// overwrite the cached state ([HydrationErrorBehavior.overwrite], default)
-  /// or retain it ([HydrationErrorBehavior.retain]) — in which case no writes
-  /// are persisted from this instance until a future successful [hydrate].
+  /// [storage] rebinds the store; otherwise it keeps the storage it was bound
+  /// to. [onHydrationError] and [onStorageError] replace the store's
+  /// handlers when given.
+  ///
+  /// When hydration fails, the [HydrationErrorBehavior] returned by the
+  /// hydration error handler decides whether later changes overwrite the
+  /// stored state ([HydrationErrorBehavior.overwrite], default) or leave it
+  /// ([HydrationErrorBehavior.retain]) until a later successful [hydrate].
+  /// A [fromJson] that throws part-way leaves the fields it already set.
   void hydrate({
     Storage? storage,
-    OnHydrationError onHydrationError = defaultOnHydrationError,
-    OnStorageError onStorageError = defaultOnStorageError,
+    OnHydrationError? onHydrationError,
+    OnStorageError? onStorageError,
   }) {
-    __storage = storage ??= HydratedMobX.storage;
-    _onStorageError = onStorageError;
+    if (isVersionKey(storageToken)) {
+      throw ArgumentError.value(
+        storageToken,
+        'storageToken',
+        'must not end with the reserved "$versionKeySuffix"',
+      );
+    }
+    final target =
+        _boundStorage = storage ?? _boundStorage ?? HydratedMobX.storage;
+    if (onHydrationError != null) _onHydrationError = onHydrationError;
+    if (onStorageError != null) _onStorageError = onStorageError;
     _register();
     _behavior = HydrationErrorBehavior.overwrite;
-    // The version already recorded on disk (null/non-int means unversioned).
-    // The persistence reaction stamps [version] only after the state that
-    // produced it has been written, so the version can never lead the state.
-    final rawVersion = __storage.read(_versionToken);
-    if (rawVersion != null && rawVersion is! int) {
-      log(
-        'Persisted version for "$storageToken" is not an int ($rawVersion); '
-        'treating the data as unversioned.',
-        name: 'HydratedMobx',
-      );
-    }
-    _lastStampedVersion = _cast<int>(rawVersion);
+    _forgetPersisted();
+    // Untracked: hydrating inside a widget build or another reaction must
+    // not make that caller depend on the storage or the observer.
+    untracked(() => _readStored(target));
+    _startPersisting();
+  }
+
+  void _readStored(Storage target) {
     try {
-      final stateJson = __storage.read(storageToken) as Map<dynamic, dynamic>?;
-      if (stateJson != null) {
-        var json = _fromJson(stateJson);
-        // Data written before schema versioning existed has no version key and
-        // is treated as version 1.
-        final storedVersion = _lastStampedVersion ?? 1;
-        if (storedVersion < version) {
-          json = migrate(storedVersion, json);
-        } else if (storedVersion > version) {
-          log(
-            'Persisted schema version $storedVersion for "$storageToken" is '
-            'newer than the current version $version; loading without '
-            'migration. Data may not match the current schema.',
-            name: 'HydratedMobx',
-          );
-        }
-        fromJson(json);
+      // The persistence run stamps [version] only after the state that
+      // produced it has been written, so the version never leads the state.
+      final rawVersion = target.read(_versionToken);
+      if (rawVersion != null && rawVersion is! int) {
+        log(
+          'Persisted version for "$storageToken" is not an int ($rawVersion); '
+          'treating the data as unversioned.',
+          name: 'HydratedMobx',
+        );
+      }
+      _lastStampedVersion = rawVersion is int ? rawVersion : null;
+      final Object? stored = target.read(storageToken);
+      if (stored != null) {
+        if (target is UseTrackingStorage) target.markUsed(storageToken);
+        _restore(target, stored);
       }
     } catch (error, stackTrace) {
+      _behavior = _reportHydrationError(error, stackTrace);
+    }
+  }
+
+  void _restore(Storage target, Object stored) {
+    if (stored is! Map) {
+      throw FormatException(
+        'Persisted state for "$storageToken" is not a map',
+        stored.runtimeType.toString(),
+      );
+    }
+    // Data written before schema versioning existed has no version key and
+    // is treated as version 1.
+    final storedVersion = _lastStampedVersion ?? 1;
+    Map<String, dynamic>? json = plainJson(stored)! as Map<String, dynamic>;
+    if (storedVersion < version) {
+      json = migrate(storedVersion, json);
+      if (json == null) {
+        _discard(target);
+        _notifyMigrated(storedVersion);
+        return;
+      }
+    } else if (storedVersion > version) {
       log(
-        'Error hydrating store: $error\n',
-        stackTrace: stackTrace,
+        'Persisted schema version $storedVersion for "$storageToken" is '
+        'newer than the current version $version; loading without '
+        'migration. Data may not match the current schema.',
         name: 'HydratedMobx',
       );
-      _behavior = onHydrationError(error, stackTrace);
     }
+    fromJson(json);
+    // The storage's own value, not the copy fromJson may keep and mutate.
+    if (storedVersion == version) _lastPersisted = stored;
+    if (storedVersion < version) _notifyMigrated(storedVersion);
+  }
 
-    _startPersisting();
+  /// Tells the observer, once the store holds the migrated state; a failing
+  /// observer must not turn a good hydration into a failed one.
+  void _notifyMigrated(int fromVersion) {
+    try {
+      observer.onMigrate(this, fromVersion, version);
+    } catch (error, stackTrace) {
+      _reportStorageError(error, stackTrace);
+    }
+  }
+
+  /// Deletes stored state that [migrate] chose not to carry forward.
+  void _discard(Storage target) {
+    _lastStampedVersion = null;
+    unawaited(
+      Future.sync(() => target.deleteAll([storageToken, _versionToken]))
+          .catchError(_reportStorageError),
+    );
   }
 
   /// Arms the MobX reaction that persists state changes.
   ///
-  /// Disposes any reaction from a previous call first, so re-invoking
-  /// [hydrate] (or re-arming after a [clear]) never leaks a reaction or writes
-  /// twice. Each reaction captures the clear generation active when it was
-  /// armed, so a write scheduled before a [clear] is dropped rather than
+  /// Disposes any previous reaction first, so re-arming never leaks one or
+  /// writes twice. Each reaction captures the clear generation active when
+  /// it was armed, so a write scheduled before a clear is dropped rather than
   /// resurrecting cleared state.
   void _startPersisting() {
-    _persistDisposer?.call();
-    final myGeneration = _clearGeneration;
-    _persistDisposer = autorun((_) {
-      if (myGeneration != _clearGeneration) return;
-      if (_behavior == HydrationErrorBehavior.retain) return;
-      final json = _toJson(toJson());
-      if (json == null) return;
-      final stateWrite = __storage.write(storageToken, json);
-      // Only versioned stores (version > 1) record a version key; a default
-      // v1 store needs none (an absent key reads back as version 1).
-      if (version > 1 && _lastStampedVersion != version) {
-        // Stamp the schema version only after the state write succeeds, so a
-        // failure or crash leaves the version behind the state (which just
-        // re-runs migration next launch) rather than ahead of it (which would
-        // skip a required migration and corrupt data).
-        stateWrite.then((_) {
-          // A clear() may have run (bumping the generation and deleting the
-          // version key) while this continuation was pending. Skip the
-          // version write so it does not resurrect the deleted key.
-          if (myGeneration != _clearGeneration) return null;
-          return __storage.write(_versionToken, version).then((_) {
-            // Re-check for the same reason: a clear() during this write
-            // already reset _lastStampedVersion, so flipping it back would
-            // suppress the re-stamp the resumed reaction owes the key.
-            // Flipping only after the write resolves also lets a failed
-            // version write be retried by the next state change.
-            if (myGeneration != _clearGeneration) return;
-            _lastStampedVersion = version;
-          });
-        }).catchError(_onStorageError);
-      } else {
-        stateWrite.catchError(_onStorageError);
-      }
+    _stopPersisting();
+    final generation = _clearGeneration;
+    final delay = _persistDelay ?? defaultPersistDelay;
+    _persistDisposer = autorun(
+      (_) => _persist(generation),
+      name: 'HydratedMobX.persist($storageToken)',
+      scheduler: delay > Duration.zero ? (run) => _schedule(run, delay) : null,
+    );
+  }
+
+  Timer _schedule(void Function() run, Duration delay) {
+    final timer = Timer(delay, () {
+      _pending = null;
+      run();
+    });
+    _pending = (timer: timer, run: run);
+    return timer;
+  }
+
+  void _persist(int generation) {
+    if (_behavior == HydrationErrorBehavior.retain) return;
+    final Map<String, dynamic> json;
+    try {
+      final raw = toJson();
+      if (raw == null) return;
+      json = trustToJson ? raw : _toJson(raw);
+    } catch (error, stackTrace) {
+      // Caught here rather than by MobX, which would wrap it.
+      untracked(() => _reportStorageError(error, stackTrace));
+      return;
+    }
+    // Only versioned stores (version > 1) record a version key; an absent
+    // key reads back as version 1.
+    final stamp = version > 1 && _lastStampedVersion != version;
+    if (!stamp && _jsonEquals(_lastPersisted, json)) return;
+    _lastPersisted = json;
+    // Untracked: a storage or error handler that reads observables must not
+    // become a dependency of (or loop) this reaction.
+    _lastWrite = untracked(() => _write(generation, json, stamp: stamp));
+  }
+
+  Future<void> _write(
+    int generation,
+    Map<String, dynamic> json, {
+    required bool stamp,
+  }) {
+    final target = _boundStorage!;
+    var done = Future.sync(() => target.write(storageToken, json));
+    if (stamp) {
+      // Stamp the version only after the state write succeeds, so a failure
+      // or crash leaves the version behind the state (which re-runs
+      // migration) rather than ahead of it (which would skip one).
+      done = done.then((_) {
+        // A clear may have run (bumping the generation and deleting the
+        // version key) while this was pending; don't resurrect the key.
+        if (generation != _clearGeneration) return null;
+        return target.write(_versionToken, version).then((_) {
+          // Flip only once written, so a failed stamp is retried by the next
+          // change, and not after a clear that reset it meanwhile.
+          if (generation == _clearGeneration) _lastStampedVersion = version;
+        });
+      });
+    }
+    return done.catchError((Object error, StackTrace stackTrace) {
+      // Write the same state again on the next run.
+      if (identical(_lastPersisted, json)) _lastPersisted = null;
+      _reportStorageError(error, stackTrace);
     });
   }
 
-  Map<String, dynamic>? _toJson(Map<String, dynamic>? json) {
-    if (json == null) return null;
-    return _cast<Map<String, dynamic>>(_traverseWrite(json).value);
-  }
-
-  Map<String, dynamic> _fromJson(dynamic json) {
-    final dynamic traversedJson = _traverseRead(json);
-    final castJson = _cast<Map<String, dynamic>>(traversedJson);
-    return castJson ?? <String, dynamic>{};
-  }
-
-  dynamic _traverseRead(dynamic value) {
-    if (value is Map) {
-      return value.map<String, dynamic>((dynamic key, dynamic value) {
-        return MapEntry<String, dynamic>(
-          _cast<String>(key) ?? '',
-          _traverseRead(value),
-        );
-      });
+  /// Writes the pending state now, when a `persistDelay` is holding it back,
+  /// and completes when the latest write has finished. Write errors go to the
+  /// storage error handler, not to the returned future.
+  Future<void> flush() {
+    final run = _pending?.run;
+    if (run != null) {
+      _cancelPending();
+      run();
     }
-    if (value is List) {
-      for (var i = 0; i < value.length; i++) {
-        value[i] = _traverseRead(value[i]);
-      }
-    }
-    return value;
+    return _lastWrite;
   }
 
-  T? _cast<T>(dynamic x) => x is T ? x : null;
+  // ---------------------------------------------------------------------------
+  // JSON traversal
+  // ---------------------------------------------------------------------------
 
-  _Traversed _traverseWrite(Object? value) {
+  Map<String, dynamic> _toJson(Map<String, dynamic> json) {
+    try {
+      return _traverseWrite(json) as Map<String, dynamic>;
+    } finally {
+      // A failed walk leaves the objects it was inside of behind.
+      _seen.clear();
+    }
+  }
+
+  dynamic _traverseWrite(Object? value) {
     final dynamic traversedAtomicJson = _traverseAtomicJson(value);
-    if (traversedAtomicJson is! NIL) {
-      return _Traversed.atomic(traversedAtomicJson);
-    }
+    if (traversedAtomicJson is! NIL) return traversedAtomicJson;
     final dynamic traversedComplexJson = _traverseComplexJson(value);
-    if (traversedComplexJson is! NIL) {
-      return _Traversed.complex(traversedComplexJson);
-    }
+    if (traversedComplexJson is! NIL) return traversedComplexJson;
     try {
       _checkCycle(value);
       final dynamic customJson = _toEncodable(value);
@@ -345,7 +619,7 @@ abstract class HydratedMobX with Store {
         throw HydratedUnsupportedError(value);
       }
       _removeSeen(value);
-      return _Traversed.complex(traversedCustomJson);
+      return traversedCustomJson;
     } on HydratedCyclicError catch (e) {
       throw HydratedUnsupportedError(value, cause: e);
     } on HydratedUnsupportedError {
@@ -373,26 +647,20 @@ abstract class HydratedMobX with Store {
 
   dynamic _traverseComplexJson(dynamic object) {
     if (object is List) {
-      if (object.isEmpty) return object;
+      // Always a new list: the result is kept to compare the next state
+      // with, so it must not alias a list the store may still mutate.
+      if (object.isEmpty) return <dynamic>[];
       _checkCycle(object);
-      List<dynamic>? list;
-      for (var i = 0; i < object.length; i++) {
-        final traversed = _traverseWrite(object[i]);
-        list ??= traversed.outcome == _Outcome.atomic
-            ? object.sublist(0)
-            : (<dynamic>[]..length = object.length);
-        list[i] = traversed.value;
-      }
+      final list = <dynamic>[
+        for (final item in object) _traverseWrite(item),
+      ];
       _removeSeen(object);
       return list;
     } else if (object is Map) {
       _checkCycle(object);
       final map = <String, dynamic>{};
       object.forEach((dynamic key, dynamic value) {
-        final castKey = _cast<String>(key);
-        if (castKey != null) {
-          map[castKey] = _traverseWrite(value).value;
-        }
+        if (key is String) map[key] = _traverseWrite(value);
       });
       _removeSeen(object);
       return map;
@@ -427,6 +695,10 @@ abstract class HydratedMobX with Store {
     _seen.removeLast();
   }
 
+  // ---------------------------------------------------------------------------
+  // Overridable API
+  // ---------------------------------------------------------------------------
+
   /// [id] is used to uniquely identify multiple instances
   /// of the same store type.
   /// In most cases it is not necessary;
@@ -436,12 +708,13 @@ abstract class HydratedMobX with Store {
   /// in order to keep the caches independent of each other.
   String get id => '';
 
-  /// Storage prefix which can be overridden to provide a custom
-  /// storage namespace.
-  /// Defaults to [runtimeType] but should be overridden in cases
-  /// where stored data should be resilient to obfuscation or persist
-  /// between debug/release builds.
-  String get storagePrefix => runtimeType.toString();
+  /// The fixed name this store's state is stored under. Together with the
+  /// id it must not end with [versionKeySuffix], which is reserved.
+  ///
+  /// Required: deriving it from `runtimeType` would lose the stored state
+  /// whenever the class is renamed or the build is obfuscated. Two store
+  /// types must never share a prefix.
+  String get storagePrefix;
 
   /// `storageToken` is used as registration token for hydrated storage.
   /// Uses the optional constructor argument when provided, otherwise [id].
@@ -449,8 +722,21 @@ abstract class HydratedMobX with Store {
   String get storageToken => '$storagePrefix${_constructorStorageId ?? id}';
 
   /// Key under which the persisted schema [version] for this store is stored.
-  @nonVirtual
-  String get _versionToken => '$storageToken$_versionKeySuffix';
+  String get _versionToken => versionKeyOf(storageToken);
+
+  /// Whether [toJson] already returns plain JSON: only `null`, `bool`, `num`,
+  /// `String`, `List` and `Map<String, ...>` values, nested any way, built
+  /// fresh on each call.
+  ///
+  /// When `true`, the state is written as returned, skipping the traversal
+  /// that otherwise converts objects through their `toJson()` and copies the
+  /// result. Override it for large states whose [toJson] already does the
+  /// full conversion, e.g. with json_serializable's `explicit_to_json: true`
+  /// and a generic DTO's `toJson((item) => item.toJson())`.
+  ///
+  /// Returning a collection the store keeps and mutates breaks change
+  /// detection; build new collections in [toJson].
+  bool get trustToJson => false;
 
   /// The current schema version of this store's persisted state.
   ///
@@ -471,65 +757,57 @@ abstract class HydratedMobX with Store {
   /// blocks (Dart `switch` cases do not fall through, so a `switch` would skip
   /// the intermediate upgrades).
   ///
+  /// Return `null` to drop the old state instead: it is deleted, [fromJson]
+  /// is not called, and the store keeps its initial state.
+  ///
   /// The default implementation returns [oldState] unchanged.
   ///
   /// ```dart
   /// @override
-  /// int get version => 2;
+  /// int get version => 3;
   ///
   /// @override
-  /// Map<String, dynamic> migrate(int oldVersion, Map<String, dynamic> old) {
-  ///   if (oldVersion < 2) {
+  /// Map<String, dynamic>? migrate(int oldVersion, Map<String, dynamic> old) {
+  ///   if (oldVersion < 2) return null; // v1 cannot be read any more
+  ///   if (oldVersion < 3) {
   ///     old['count'] = old.remove('counter') ?? 0; // renamed field
   ///   }
   ///   return old;
   /// }
   /// ```
-  Map<String, dynamic> migrate(int oldVersion, Map<String, dynamic> oldState) =>
+  Map<String, dynamic>? migrate(
+    int oldVersion,
+    Map<String, dynamic> oldState,
+  ) =>
       oldState;
 
-  /// [clear] is used to wipe or invalidate the cache of a store.
-  /// Calling [clear] will delete the cached state of the store
-  /// but will not modify the current state of the store.
+  /// Deletes this store's persisted state (and its version key) without
+  /// changing its current state.
   ///
-  /// Any in-flight write scheduled before the clear is dropped, so the deleted
-  /// key cannot be resurrected.
-  ///
-  /// By default persistence then **stops**: future observable changes are no
-  /// longer written. Pass `resume: true` to keep persisting after the wipe —
-  /// subsequent changes are saved again (unless hydration failed with
-  /// [HydrationErrorBehavior.retain]). To stop persisting permanently, use
-  /// [dispose].
-  Future<void> clear({bool resume = false}) async {
-    _clearGeneration++;
-    _persistDisposer?.call();
-    _persistDisposer = null;
-    await __storage.delete(storageToken);
-    // Delete the paired version key so a later re-seed/import is not skipped by
-    // stale version metadata, and so resumed writes re-stamp the version.
-    await __storage.delete(_versionToken);
-    _lastStampedVersion = null;
-    if (resume) _startPersisting();
+  /// Any write pending from before the call is dropped, so the deleted key
+  /// cannot be resurrected. Persistence then **stops**; pass `resume: true`
+  /// to keep persisting, which writes the current state back as any change
+  /// would: right away, or after `persistDelay`.
+  /// To stop persisting without deleting anything, use [dispose].
+  Future<void> clearPersisted({bool resume = false}) async {
+    final target = _boundStorage!;
+    _suspend();
+    await target.deleteAll([storageToken, _versionToken]);
+    if (resume && _selfRef != null) _startPersisting();
   }
 
-  /// Permanently stops this store from persisting state and removes it from the
-  /// internal instance registry.
+  /// Permanently stops this store from persisting state and removes it from
+  /// the instance registry. A write that `persistDelay` was holding back is
+  /// started first; `await flush()` before [dispose] to wait for it.
   ///
-  /// Call this when the store is no longer used (e.g. from the owning widget's
-  /// `dispose`) to release the persistence reaction and let the instance be
-  /// garbage collected. Unlike [clear], the cached state on disk is left
-  /// untouched and persistence does not resume. Safe to call more than once.
+  /// Call this when the store is no longer used. Unlike [clearPersisted], the
+  /// stored state is left untouched. Safe to call more than once.
   ///
-  /// Deterministically removes the instance from the registry. Stores that are
-  /// simply dropped without calling [dispose] are still pruned lazily once the
-  /// garbage collector reclaims them, but calling [dispose] is preferred: it
-  /// releases the reaction immediately rather than waiting for collection.
-  ///
-  /// This releases only the persistence reaction; it does not tear down the
-  /// store's own MobX observables/actions, which remain usable afterwards.
+  /// This releases only the persistence reaction; the store's own MobX
+  /// observables and actions remain usable afterwards.
   void dispose() {
-    _persistDisposer?.call();
-    _persistDisposer = null;
+    unawaited(flush());
+    _stopPersisting();
     final ref = _selfRef;
     if (ref != null) {
       _instances.remove(ref);
@@ -540,6 +818,10 @@ abstract class HydratedMobX with Store {
 
   /// Responsible for converting the `Map<String, dynamic>` representation
   /// of the store state into a concrete instance of the store state.
+  ///
+  /// [json] is a fresh, deep copy: every nested map is
+  /// `Map<String, dynamic>` and every nested list is `List<dynamic>`, so it
+  /// can be handed straight to json_serializable `fromJson` factories.
   void fromJson(Map<String, dynamic> json);
 
   /// Responsible for converting a concrete instance of the store state
@@ -547,6 +829,60 @@ abstract class HydratedMobX with Store {
   ///
   /// If [toJson] returns `null`, then no state changes will be persisted.
   Map<String, dynamic>? toJson();
+}
+
+/// {@template hydrated_observer}
+/// Handles the failures of every store that was not given its own handler,
+/// and hears about migrations. Set [HydratedMobX.observer] to a subclass.
+///
+/// ```dart
+/// class CrashReportingObserver extends HydratedObserver {
+///   @override
+///   void onStorageError(HydratedMobX store, Object error, StackTrace st) =>
+///       crashReporter.record(error, st, reason: store.storageToken);
+/// }
+/// ```
+/// {@endtemplate}
+class HydratedObserver {
+  /// {@macro hydrated_observer}
+  const HydratedObserver();
+
+  /// Called when [store] fails to hydrate. The returned behavior decides
+  /// whether its later changes overwrite the stored state. Logs and returns
+  /// [HydrationErrorBehavior.overwrite] by default.
+  HydrationErrorBehavior onHydrationError(
+    HydratedMobX store,
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    log(
+      'Error hydrating "${store.storageToken}": $error',
+      error: error,
+      stackTrace: stackTrace,
+      name: 'HydratedMobx',
+    );
+    return HydrationErrorBehavior.overwrite;
+  }
+
+  /// Called when [store] fails to serialize or write its state. Persistence
+  /// is fire-and-forget, so this is the only place such failures surface.
+  /// Logs by default.
+  void onStorageError(
+    HydratedMobX store,
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    log(
+      'Error persisting "${store.storageToken}": $error',
+      error: error,
+      stackTrace: stackTrace,
+      name: 'HydratedMobx',
+    );
+  }
+
+  /// Called after [store]'s [HydratedMobX.migrate] ran from [fromVersion] to
+  /// [toVersion]. Does nothing by default.
+  void onMigrate(HydratedMobX store, int fromVersion, int toVersion) {}
 }
 
 /// Reports that an object could not be serialized due to cyclic references.
@@ -566,7 +902,7 @@ class HydratedCyclicError extends HydratedUnsupportedError {
 /// ```dart
 /// void main() async {
 ///   WidgetsFlutterBinding.ensureInitialized();
-///   HydratedMobx.storage = await HydratedStorage.build();
+///   HydratedMobX.storage = await HydratedStorage.build(...);
 ///   runApp(MyApp());
 /// }
 /// ```
@@ -581,7 +917,7 @@ class StorageNotFound implements Exception {
     return 'Storage was accessed before it was initialized.\n'
         'Please ensure that storage has been initialized.\n\n'
         'For example:\n\n'
-        'HydratedMobx.storage = await HydratedStorage.build();';
+        'HydratedMobX.storage = await HydratedStorage.build(...);';
   }
 }
 
@@ -635,46 +971,12 @@ enum HydrationErrorBehavior {
   retain,
 }
 
-/// Signature for a callback invoked when hydration fails. Returns a
-/// [HydrationErrorBehavior] to control how subsequent state changes are
-/// persisted.
+/// Signature for a store's own hydration error handler. Returns a
+/// [HydrationErrorBehavior] to control how later state changes are persisted.
 typedef OnHydrationError = HydrationErrorBehavior Function(
   Object error,
   StackTrace stackTrace,
 );
 
-/// Default [OnHydrationError] handler. Returns
-/// [HydrationErrorBehavior.overwrite].
-HydrationErrorBehavior defaultOnHydrationError(
-  Object error,
-  StackTrace stackTrace,
-) =>
-    HydrationErrorBehavior.overwrite;
-
-/// Signature for a callback invoked when persisting a state change fails.
-///
-/// Persistence is fire-and-forget, so a failing write never interrupts the
-/// store; this callback is the only way to observe such failures (e.g. to
-/// report them to a crash reporter).
+/// Signature for a store's own handler of failed state writes.
 typedef OnStorageError = void Function(Object error, StackTrace stackTrace);
-
-/// Default [OnStorageError] handler. Logs the error via `dart:developer`.
-void defaultOnStorageError(Object error, StackTrace stackTrace) {
-  log(
-    'Error persisting store: $error\n',
-    stackTrace: stackTrace,
-    name: 'HydratedMobx',
-  );
-}
-
-enum _Outcome { atomic, complex }
-
-class _Traversed {
-  _Traversed._({required this.outcome, required this.value});
-  _Traversed.atomic(dynamic value)
-      : this._(outcome: _Outcome.atomic, value: value);
-  _Traversed.complex(dynamic value)
-      : this._(outcome: _Outcome.complex, value: value);
-  final _Outcome outcome;
-  final dynamic value;
-}

@@ -1,5 +1,78 @@
 # Changelog
 
+## [2.0.0] - 2026-10-29
+
+See "Migrating from 1.x" in the README for the upgrade steps.
+
+### Breaking
+
+- `storagePrefix` is abstract. The `runtimeType` default lost stored state on a
+  class rename or an obfuscated build. Return the old class name to keep
+  reading 1.x data.
+- `clear({resume})` is renamed `clearPersisted({resume})`, freeing `clear` for
+  stores' own methods.
+- `migrate` returns `Map<String, dynamic>?`; `null` drops the stored state.
+- `defaultOnHydrationError` and `defaultOnStorageError` are removed in favour
+  of `HydratedMobX.observer`. The constructor's handlers are now optional.
+- `Storage` gains `deleteAll` and `keys`. `HydratedMobX.disposeAllForClear()`
+  is replaced by `HydratedMobX.suspendAll({storage})`, which suspends only the
+  stores bound to that storage.
+- Reading, writing or deleting through a closed `HydratedStorage` throws
+  `StorageClosedException` (reported to the error handlers) instead of being
+  silently ignored.
+- The `.hydrated_bloc.json` migration inherited from hydrated_bloc is removed.
+- The `@visibleForTesting` static `HydratedStorage.hive` is removed; each
+  storage now opens its own Hive instance.
+
+### Added
+
+- `persistDelay` (constructor) and `HydratedMobX.defaultPersistDelay`: changes
+  within the window are written once. `flush()`, `HydratedMobX.flushAll()`, and
+  `dispose()` write the pending state instead of dropping it.
+- `HydratedObserver` (`HydratedMobX.observer`): one place for every store's
+  hydration errors, storage errors and migrations.
+- `storage:` constructor parameter, binding a store to any `Storage`.
+- `HydratedStorage.build(boxName:)` for several independent storages.
+- Eviction: `HydratedStorage.build(maxAge:, maxEntries:, evictable:,
+  trackUse:, useResolution:)` and `HydratedStorage.evict()`, based on use times
+  kept in a companion box that only evicting storages open. `evict()` stops
+  the live stores of the keys it deletes.
+- `HydratedStorage.build(compactionStrategy:)`.
+- `HydratedMobX.clearAll({storage, where, resume})` and `deleteToken`: clear a
+  whole storage or only matching tokens in one `deleteAll`, suspending the
+  affected stores first.
+- `HydratedMobX.versionKeySuffix`, `versionKeyOf`, `isVersionKey`,
+  `tokenOfKey`.
+- `trustToJson`: skip the serialization walk for a `toJson` that already
+  returns plain JSON.
+- `InMemoryStorage` for tests, and `ForwardingStorage` to wrap a storage
+  (it suspends its own stores on `clear` and forwards eviction use times).
+- `UseTrackingStorage.markUsed`: hydrating a key counts as using it for
+  eviction; a plain `read` does not.
+- `HydratedMobX.rebindAll(from:, to:)` moves live stores to a rebuilt storage.
+- `HydratedJson.readStringList`; `importData(storage:)`. `importData` writes
+  the version key before the state, and at version 1 drops a version key a
+  newer build left.
+- `benchmark/persistence_benchmark.dart`.
+- The example app has one screen per feature area.
+
+### Changed
+
+- A change that leaves the JSON equal to what was last written or hydrated is
+  not written. Creating a store over stored state no longer writes it back.
+- `fromJson` receives a fresh deep copy; the storage's cached value is no
+  longer modified in place.
+- Serialization errors go to the storage error handler instead of MobX's
+  reaction log, and no longer leave the cycle detector in a bad state.
+- An empty list in `toJson` is copied, not kept by reference.
+- `HydratedJson.readList` and `readObject` accept maps with any key type and
+  convert them deeply.
+- Storage locks are per instance, and building different boxes runs in
+  parallel.
+- Storage writes and error callbacks run untracked, so a storage or observer
+  that reads observables never becomes a dependency of the persistence
+  reaction.
+
 ## [1.2.0] - 2026-08-21
 
 ### Added

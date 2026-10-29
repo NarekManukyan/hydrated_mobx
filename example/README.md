@@ -1,41 +1,64 @@
-# Hydrated MobX Example
+# HydratedMobX example
 
-This is a simple example demonstrating how to use the `hydrated_mobx` package for state persistence in Flutter applications.
+A Flutter app with one screen per `hydrated_mobx` feature:
 
-## Features
+| Screen | Shows |
+| --- | --- |
+| Counter | A store that survives a restart; `persistDelay` and `flush()` |
+| Keyed instances | One store type, one key per `storeId` |
+| Write stats | Writes counted through a `ForwardingStorage`: 100 changes, 1 write |
+| Namespaces | Session and account boxes; sign-out clears one; `clearAll(where:)` |
+| Schema migration | Seeding old data with `importData`; `migrate` upgrading or dropping it |
+| Eviction | A per-item cache bounded by `maxEntries` and `evictable` |
+| Observer & errors | Hydration, serialization and closed-storage errors in one log |
+| Storage inspector | Every key in every box, with delete and clear |
+| Encryption | An AES-256 box; the note is not in the file as plain text |
+| trustToJson | Time per write of a 2000-row state, with and without it |
 
-- Counter state persistence using MobX
-- Automatic state restoration on app restart
-- Clean and simple implementation
+## Run it
 
-## Getting Started
+```sh
+cd example
+flutter pub get
+dart run build_runner build --delete-conflicting-outputs
+flutter run
+```
 
-1. Make sure you have Flutter installed and set up
-2. Clone this repository
-3. Navigate to the example directory
-4. Run `flutter pub get` to install dependencies
-5. Run `flutter pub run build_runner build` to generate MobX code
-6. Run the app with `flutter run`
+## A minimal store
 
-## How it Works
+```dart
+part 'counter_store.g.dart';
 
-The example demonstrates a simple counter app where the count is persisted between app restarts. The persistence is handled automatically by the `hydrated_mobx` package.
+class CounterStore = CounterStoreBase with _$CounterStore;
 
-Key components:
+abstract class CounterStoreBase extends HydratedMobX with Store {
+  @observable
+  int count = 0;
 
-- `CounterStore`: A MobX store that extends `HydratedMobx` for automatic persistence
-- `main.dart`: Sets up the app and initializes the storage
-- `counter_store.dart`: Contains the business logic and state management
+  @action
+  void increment() => count++;
 
-## Usage
+  // Required: the storage key this store's state is saved under.
+  @override
+  String get storagePrefix => 'counter';
 
-To use `hydrated_mobx` in your own project:
+  @override
+  Map<String, dynamic>? toJson() => {'count': count};
 
-1. Extend `HydratedMobx` for your store
-2. Implement `toJson` and `fromJson` methods
-3. Initialize the storage in your `main.dart`
-4. Use the store as you would any other MobX store
+  @override
+  void fromJson(Map<String, dynamic> json) =>
+      count = json['count'] as int? ?? 0;
+}
+```
 
-## License
+Build the storage once in `main`, before the first store is created:
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+```dart
+HydratedMobX.storage = await HydratedStorage.build(
+  storageDirectory: HydratedStorageDirectory(
+    (await getApplicationSupportDirectory()).path,
+  ),
+);
+```
+
+See the [package README](../README.md) for the full API.

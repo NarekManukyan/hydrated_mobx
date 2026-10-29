@@ -1,6 +1,6 @@
 // GENERATED CODE - DO NOT MODIFY BY HAND
 
-part of 'keyed_counter_store.dart';
+part of 'counter_store.dart';
 
 // **************************************************************************
 // StoreGenerator
@@ -8,9 +8,11 @@ part of 'keyed_counter_store.dart';
 
 // ignore_for_file: non_constant_identifier_names, unnecessary_brace_in_string_interps, unnecessary_lambdas, prefer_expression_function_bodies, lines_longer_than_80_chars, avoid_as, avoid_annotating_with_dynamic, no_leading_underscores_for_local_identifiers
 
-mixin _$KeyedCounterStore on KeyedCounterStoreBase, Store {
-  late final _$countAtom =
-      Atom(name: 'KeyedCounterStoreBase.count', context: context);
+mixin _$CounterStore on CounterStoreBase, Store {
+  late final _$countAtom = Atom(
+    name: 'CounterStoreBase.count',
+    context: context,
+  );
 
   @override
   int get count {
@@ -25,28 +27,44 @@ mixin _$KeyedCounterStore on KeyedCounterStoreBase, Store {
     });
   }
 
-  late final _$KeyedCounterStoreBaseActionController =
-      ActionController(name: 'KeyedCounterStoreBase', context: context);
+  late final _$CounterStoreBaseActionController = ActionController(
+    name: 'CounterStoreBase',
+    context: context,
+  );
 
   @override
   void increment() {
-    final _$actionInfo = _$KeyedCounterStoreBaseActionController.startAction(
-        name: 'KeyedCounterStoreBase.increment');
+    final _$actionInfo = _$CounterStoreBaseActionController.startAction(
+      name: 'CounterStoreBase.increment',
+    );
     try {
       return super.increment();
     } finally {
-      _$KeyedCounterStoreBaseActionController.endAction(_$actionInfo);
+      _$CounterStoreBaseActionController.endAction(_$actionInfo);
     }
   }
 
   @override
   void decrement() {
-    final _$actionInfo = _$KeyedCounterStoreBaseActionController.startAction(
-        name: 'KeyedCounterStoreBase.decrement');
+    final _$actionInfo = _$CounterStoreBaseActionController.startAction(
+      name: 'CounterStoreBase.decrement',
+    );
     try {
       return super.decrement();
     } finally {
-      _$KeyedCounterStoreBaseActionController.endAction(_$actionInfo);
+      _$CounterStoreBaseActionController.endAction(_$actionInfo);
+    }
+  }
+
+  @override
+  void reset() {
+    final _$actionInfo = _$CounterStoreBaseActionController.startAction(
+      name: 'CounterStoreBase.reset',
+    );
+    try {
+      return super.reset();
+    } finally {
+      _$CounterStoreBaseActionController.endAction(_$actionInfo);
     }
   }
 

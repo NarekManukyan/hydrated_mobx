@@ -1,67 +1,85 @@
-<!--
-This README describes the package. If you publish this package to pub.dev,
-this README's contents appear on the landing page for your package.
-
-For information about how to write a good package README, see the guide for
-[writing package pages](https://dart.dev/tools/pub/writing-package-pages).
-
-For general information about developing packages, see the Dart guide for
-[creating packages](https://dart.dev/guides/libraries/create-packages)
-and the Flutter guide for
-[developing packages and plugins](https://flutter.dev/to/develop-packages).
--->
-
 # HydratedMobX
 
-A Flutter package that automatically persists and restores MobX stores. Built to work with Flutter's state management solution MobX.
+Persist and restore MobX stores automatically. A store extends `HydratedMobX`,
+says how to turn its state into JSON and back, and survives app restarts.
 
-> This package uses some code from [hydrated_bloc](https://pub.dev/packages/hydrated_bloc) by Felix Angelov, which is licensed under the MIT License. We extend our gratitude to the original authors for their work.
+> This package started from code in [hydrated_bloc](https://pub.dev/packages/hydrated_bloc)
+> by Felix Angelov (MIT). Thanks to its authors.
+
+<p align="center">
+  <img src="doc/screenshots/demo.gif" width="240" alt="A counter keeps its value after the app is killed and relaunched">
+</p>
+
+| | | |
+| :-: | :-: | :-: |
+| <img src="doc/screenshots/03_write_stats.webp" width="220" alt="Write stats"> | <img src="doc/screenshots/04_namespaces.webp" width="220" alt="Namespaces"> | <img src="doc/screenshots/05_migration.webp" width="220" alt="Schema migration"> |
+| Writes saved by `persistDelay` and change detection | Session and account boxes | `migrate` renames a field |
+| <img src="doc/screenshots/06_eviction.webp" width="220" alt="Eviction"> | <img src="doc/screenshots/07_observer.webp" width="220" alt="Observer"> | <img src="doc/screenshots/08_inspector.webp" width="220" alt="Storage inspector"> |
+| `maxEntries` keeps the 5 latest | One observer for every store | Every key in every box |
+
+The screens come from the [example app](example), one per feature.
 
 ## Features
 
-- Automatically persists and restores MobX stores
-- Supports encryption for secure storage
-- Works on all platforms (iOS, Android, Web, Linux, macOS, Windows)
-- Built on top of Hive for fast and efficient storage
-- Schema versioning with a `migrate` hook for evolving persisted state
-- Import existing data from another persistence layer via `importData`
-- Simple and intuitive API
+- Restores a store's state when it is created and saves every change.
+- **Write coalescing:** `persistDelay` turns a burst of changes into one write;
+  `flush()` / `flushAll()` write the pending state on demand.
+- **No redundant writes:** a change that leaves the JSON as it was is not
+  written, and neither is the state a store just hydrated.
+- **Several storages:** one Hive box per namespace (session, account, cache),
+  each store bound to the one it belongs in.
+- **Targeted clearing:** `clearAll(where:)` deletes only the tokens you name, in
+  one operation, and stops their stores first.
+- **Eviction:** `maxAge` and `maxEntries` keep per-id caches from growing
+  forever.
+- **Schema versions:** `version` + `migrate`, which can also drop old data.
+- **One error hook:** `HydratedMobX.observer` sees every store's hydration and
+  write failures, and every migration.
+- Encryption (AES-256), every platform Hive supports, an `InMemoryStorage` for
+  tests, and `importData` for moving data in from another layer.
+
+## Benchmarks
+
+`dart run benchmark/persistence_benchmark.dart`, the same scenarios run against
+1.2.0. Apple M4 Pro, Dart 3.13 JIT, Hive on the local SSD.
+
+| Scenario | 1.2.0 | 2.0.0 |
+| --- | --- | --- |
+| 1000 rapid changes to one store | 1000 writes | 1000 writes, or **1** with `persistDelay: 100ms` |
+| Re-creating a hydrated store 100 times | 100 writes | **0** writes |
+| One change to a 2000-row state, time blocking the caller | 1.15 ms | 0.97 ms, **0.41 ms** with `trustToJson` |
+| 500 per-id cache keys | kept forever | **50** kept with `maxEntries: 50` |
 
 ## Getting started
 
-Add the package to your `pubspec.yaml`:
-
 ```yaml
 dependencies:
-  hydrated_mobx: ^1.2.0
+  hydrated_mobx: ^2.0.0
 ```
 
-## Usage
-
-1. Initialize HydratedMobX in your main.dart:
+Build the storage before `runApp`:
 
 ```dart
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-import 'package:hydrated_mobx/hydrated_mobx.dart';
-import 'package:path_provider/path_provider.dart';
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final appDocumentDir = await getApplicationDocumentsDirectory();
   HydratedMobX.storage = await HydratedStorage.build(
-    storageDirectory: HydratedStorageDirectory(appDocumentDir.path),
+    storageDirectory: kIsWeb
+        ? HydratedStorageDirectory.web
+        : HydratedStorageDirectory(
+            (await getApplicationSupportDirectory()).path,
+          ),
   );
-  runApp(App());
+  runApp(const App());
 }
 ```
 
-2. Create a hydrated store:
+Upgrading from 1.x? Keep the directory you built the storage in before. The
+1.x docs used `getApplicationDocumentsDirectory()`; a different directory opens
+an empty box, and every store starts from its defaults.
+
+## A hydrated store
 
 ```dart
-import 'package:mobx/mobx.dart';
-import 'package:hydrated_mobx/hydrated_mobx.dart';
-
 part 'counter_store.g.dart';
 
 class CounterStore = _CounterStore with _$CounterStore;
@@ -74,209 +92,386 @@ abstract class _CounterStore extends HydratedMobX with Store {
   void increment() => count++;
 
   @override
+  String get storagePrefix => 'counter';
+
+  @override
   Map<String, dynamic>? toJson() => {'count': count};
 
   @override
-  void fromJson(Map<String, dynamic> json) {
-    count = json['count'] as int;
-  }
+  void fromJson(Map<String, dynamic> json) => count = json['count'] as int;
 }
 ```
 
-### Overriding the storage key (per-instance id)
+- `storagePrefix` is the store's fixed name on disk. It is required: a name
+  taken from the class would change with a rename or an obfuscated build, and
+  the stored state would be lost. Two store types must not share one.
+- The store hydrates in its constructor, before your constructor body runs, so
+  `toJson` and `fromJson` may only use fields set by initializers.
+- `toJson` returning `null` skips the write.
 
-When you have multiple instances of the same store (e.g. one per meeting or per user), pass the id to `super(storeId: ...)` so hydration uses the correct key. This works with dependency injection (e.g. injectable):
+### Several instances of one store
+
+Give each instance its own key with `storeId` (or override `id`). The key is
+`'$storagePrefix${storeId ?? id}'`.
 
 ```dart
-abstract class _MeetingStoreBase extends HydratedMobX with Store {
-  _MeetingStoreBase(
-    DioService dioService,
-    MeetingsStore meetingsStore,
-    @factoryParam String meetingId,
-  ) : _meetingId = meetingId,
-      super(storeId: meetingId);
+abstract class _ThreadStore extends HydratedMobX with Store {
+  _ThreadStore(this.threadId) : super(storeId: threadId);
 
-  final String _meetingId;
+  final String threadId;
 
   @override
-  String get id => _meetingId;
+  String get storagePrefix => 'thread_';
   // ...
 }
 ```
 
-See the example app’s `KeyedCounterStore` for a minimal example.
+## Writing less
 
-### Type-safe fromJson / toJson with HydratedJson
+### Coalescing with `persistDelay`
 
-To avoid manual type checks and try/catch in `fromJson`/`toJson`, use the `HydratedJson` helpers:
+Every change is written right away by default. With a `persistDelay`, changes
+made within that window are written once, when it ends:
 
 ```dart
-import 'package:hydrated_mobx/hydrated_mobx.dart';
-import 'package:mobx/mobx.dart';
+_DraftStore() : super(persistDelay: const Duration(milliseconds: 300));
+```
+
+Set `HydratedMobX.defaultPersistDelay` to apply one to every store built
+without its own.
+
+A coalesced change is lost if the process dies inside the window, so write the
+pending state when the app goes to the background:
+
+```dart
+AppLifecycleListener(onPause: () => HydratedMobX.flushAll());
+```
+
+`store.flush()` does the same for one store, and completes when the write has
+finished. `dispose()` starts a pending write instead of dropping it.
+
+### Unchanged state is not written
+
+Before writing, the store compares the new JSON with the JSON it last wrote or
+hydrated, and skips the write when they are equal. Opening a cached screen
+therefore costs a read and no write.
+
+### `trustToJson` for large states
+
+Before writing, the store walks the JSON your `toJson` returned: it calls
+`toJson()` on objects it meets and copies the result. When your `toJson`
+already returns plain JSON, skip that walk:
+
+```dart
+@override
+bool get trustToJson => true;
 
 @override
-void fromJson(Map<String, dynamic> json) {
-  _meetings = HydratedJson.readList(
-    json,
-    'meetings',
-    MeetingDto.fromJson,
-  ).asObservable();
-  _meta = HydratedJson.readObject(json, 'meta', MetaDto.fromJson) ??
-      MetaDto(take: 20);
+Map<String, dynamic>? toJson() => {
+      'page': _page.toJson((post) => post.toJson()),
+    };
+```
+
+Plain JSON means only `null`, `bool`, `num`, `String`, `List` and
+`Map<String, ...>`, built fresh on each call. Returning a collection the store
+keeps and later mutates breaks the comparison above.
+
+With json_serializable, set `explicit_to_json: true` so nested objects come out
+as maps. A generic DTO's `toJson` takes a converter, which the walk cannot
+supply; call it yourself, as above, rather than round-tripping through
+`jsonEncode`/`jsonDecode`.
+
+### What `fromJson` receives
+
+`fromJson` gets a fresh, deep copy of the stored state: every nested map is a
+`Map<String, dynamic>` and every list a `List<dynamic>`, whatever Hive returned.
+Pass the parts straight to json_serializable factories; there is no need to
+round-trip through `jsonEncode` first.
+
+The `HydratedJson` helpers read fields with safe defaults (`readList`,
+`readObject`, `readStringList`, `readString`, `readInt`, `readDouble`,
+`readBool`, `writeList`).
+
+## Errors
+
+Persistence runs in the background, so failures do not reach your code. Set an
+observer once to see them all:
+
+```dart
+class CrashReportingObserver extends HydratedObserver {
+  @override
+  void onStorageError(HydratedMobX store, Object error, StackTrace stack) =>
+      FirebaseCrashlytics.instance.recordError(error, stack,
+          reason: 'persist ${store.storageToken}');
+
+  @override
+  HydrationErrorBehavior onHydrationError(
+    HydratedMobX store,
+    Object error,
+    StackTrace stack,
+  ) {
+    FirebaseCrashlytics.instance.recordError(error, stack);
+    return HydrationErrorBehavior.overwrite;
+  }
 }
+
+HydratedMobX.observer = CrashReportingObserver();
+```
+
+- `onStorageError` covers failed writes and states that cannot be serialized.
+- `onHydrationError` decides what happens after a failed read: `overwrite`
+  (default) lets new changes replace the stored state, `retain` keeps it and
+  stops writing until the next successful `hydrate()`.
+- `onMigrate` hears about every migration.
+
+A store that passes its own `onStorageError` or `onHydrationError` handles its
+failures itself instead.
+
+Using a storage after `close()` throws `StorageClosedException`, which reaches
+the same handlers.
+
+## Several storages
+
+Build one storage per namespace, each with its own `boxName`, and bind stores
+with `storage:`. Clearing one never touches another.
+
+```dart
+final session = await HydratedStorage.build(
+  storageDirectory: directory,
+  boxName: 'session',
+);
+final account = await HydratedStorage.build(
+  storageDirectory: directory,
+  boxName: 'account',
+);
+
+class OutboxStore extends _OutboxStore with _$OutboxStore {
+  OutboxStore(Storage accountStorage) : super(storage: accountStorage);
+}
+
+// On sign-out:
+await HydratedMobX.clearAll(storage: session);
+```
+
+The storage is a constructor parameter, so it works with dependency injection
+and with test doubles. Stores built without one use `HydratedMobX.storage`.
+
+## Clearing state
+
+| Call | Deletes | Stops persisting |
+| --- | --- | --- |
+| `store.clearPersisted()` | that store's state | that store (`resume: true` keeps it going) |
+| `HydratedMobX.clearAll(storage: s)` | everything in `s` | every store bound to `s` |
+| `HydratedMobX.clearAll(where: (token) => ...)` | the matching tokens | the matching stores |
+| `HydratedMobX.deleteToken('token')` | one token | its store, if live |
+| `store.dispose()` | nothing | that store, for good |
+
+Every call also deletes the version keys of what it deletes, and drops writes
+already scheduled, so cleared state cannot come back. `clearAll(where:)`
+deletes in a single `deleteAll`, so the keys you keep are never rewritten.
+
+`HydratedMobX.versionKeyOf`, `isVersionKey` and `tokenOfKey` map between a
+store's token and the `.__version` key kept beside versioned state.
+
+Call `dispose()` when a store's owner goes away (a widget's `dispose`, a DI
+scope's teardown). A persisting store is kept alive by its MobX reaction, and
+`dispose()` releases it.
+
+## Eviction
+
+Per-id stores (one per user, per thread, per item) add a key each and are
+never deleted on their own. Bound them when building the storage:
+
+```dart
+final cache = await HydratedStorage.build(
+  storageDirectory: directory,
+  boxName: 'cache',
+  maxAge: const Duration(days: 30),
+  maxEntries: 200,
+  evictable: (key) => key.startsWith('profile_'),
+);
+```
+
+- `maxAge` deletes keys not hydrated or written for that long. A plain
+  `storage.read` does not count, so an inspector screen keeps nothing alive.
+- `maxEntries` then keeps only the most recently used keys.
+- `evictable` limits both to the keys it accepts.
+
+Eviction runs when the storage is built, before any store reads from it.
+`storage.evict(...)` runs it again later, and stops the live stores of the keys
+it deletes. Only a storage built with `maxAge`, `maxEntries` or
+`trackUse: true` records use times, in a small companion box; other storages
+pay nothing for eviction. A key's use time is rewritten at most once per
+`useResolution` (a minute by default). Keys written before 2.0 count as used at
+the first 2.0 launch. Keep the eviction settings the same across launches:
+keys written while use times were not tracked look as old as their last
+recorded use.
+
+`compactionStrategy` tunes when Hive rewrites the box file.
+
+## Schema versions
+
+Bump `version` when the shape of `toJson` changes, and upgrade older data in
+`migrate`. Return `null` to drop data too old to carry forward:
+
+```dart
+@override
+int get version => 3;
 
 @override
-Map<String, dynamic> toJson() => {
-  'meetings': HydratedJson.writeList(_meetings, (e) => e.toJson()),
-  'meta': _meta.toJson(),
-};
+Map<String, dynamic>? migrate(int oldVersion, Map<String, dynamic> old) {
+  if (oldVersion < 2) return null; // v1 cannot be read any more
+  if (oldVersion < 3) old['count'] = old.remove('counter') ?? 0;
+  return old;
+}
 ```
 
-Available helpers: `readList`, `readObject`, `readString`, `readInt`, `readDouble`, `readBool`, `writeList`. They return safe defaults (e.g. empty list, 0, null) when the key is missing or the value has the wrong type.
+- `migrate` runs during hydration when the stored version is lower. Its result
+  goes to `fromJson` and is written under the new version, which is recorded
+  only after the state, so a crash re-runs the migration instead of skipping
+  it.
+- Returning `null` deletes the stored state; `fromJson` is not called.
+- Data written before versioning existed counts as version 1.
+- Apply each step with stacked `if (oldVersion < N)` blocks. Dart `switch`
+  cases do not fall through.
 
-### Migrating persisted state across schema changes
+## Importing data
 
-When the shape of your persisted state changes between app releases, bump
-`version` and implement `migrate` to upgrade older data. `migrate` is called
-during hydration whenever the stored version is lower than the current one; its
-result is passed to `fromJson` and re-persisted under the new version, so it runs
-only once per upgrade. Data written before versioning existed is treated as
-version `1`.
+Seed a storage from another persistence layer before building the stores that
+read it. Keys are store tokens.
 
 ```dart
-class CounterStore extends HydratedMobX with Store {
-  CounterStore() { hydrate(); }
+final prefs = await SharedPreferences.getInstance();
+await HydratedMobX.importData({
+  'counter': {'count': prefs.getInt('count') ?? 0},
+});
+```
 
-  final Observable<int> _count = Observable(0);
-  int get count => _count.value;
+Existing keys are kept unless `overwrite: true`. Pass `version:` when the data
+is already in a newer schema, so it is not migrated again; `storage:` targets a
+storage other than the global one.
+
+## Encryption
+
+```dart
+final key = sha256.convert(utf8.encode(password)).bytes;
+HydratedMobX.storage = await HydratedStorage.build(
+  storageDirectory: directory,
+  encryptionCipher: HydratedAesCipher(key),
+);
+```
+
+Hive encrypts values, not keys: a store's token (`storagePrefix` plus its id)
+is readable in the box file. Keep secrets out of `storeId`s.
+
+## Testing
+
+```dart
+setUp(() => HydratedMobX.storage = InMemoryStorage());
+```
+
+Or pass `storage: InMemoryStorage({'counter': {'count': 3}})` to the store
+under test to start it from a known state.
+
+## Wrapping or writing a storage
+
+To wrap a storage (count, log or delay writes), extend `ForwardingStorage` and
+override what you need. It forwards everything to `inner`, suspends its own
+stores on `clear`, and passes eviction use times through.
+
+```dart
+class LoggingStorage extends ForwardingStorage {
+  LoggingStorage(super.inner);
 
   @override
-  int get version => 2;
-
-  @override
-  Map<String, dynamic> migrate(int oldVersion, Map<String, dynamic> old) {
-    if (oldVersion < 2) {
-      // v1 stored the value under 'counter'; v2 renamed it to 'count'.
-      old['count'] = old.remove('counter') ?? 0;
-    }
-    return old;
+  Future<void> write(String key, dynamic value) {
+    debugPrint('write $key');
+    return super.write(key, value);
   }
-
-  @override
-  Map<String, dynamic>? toJson() => {'count': _count.value};
-
-  @override
-  void fromJson(Map<String, dynamic> json) =>
-      _count.value = (json['count'] as int?) ?? 0;
 }
 ```
 
-When jumping multiple versions at once, apply every intermediate step in order
-with stacked `if (oldVersion < N)` blocks. Dart `switch` cases do not fall
-through, so a `switch` would skip the intermediate upgrades.
+Storage calls and observer callbacks run untracked, so a storage or observer
+may read MobX observables without the persistence reaction depending on them.
 
-### Importing existing data
+To write one from scratch, implement `Storage`: `read`, `write`, `delete`,
+`deleteAll`, `keys`, `clear` and `close`. `read` is synchronous, because stores
+hydrate in their constructor. From `clear`, call
+`HydratedMobX.suspendAll(storage: this)` before wiping, so no store writes its
+state back. Implement `UseTrackingStorage.markUsed` to take part in eviction.
 
-To bring data in from another persistence layer — `SharedPreferences`, a legacy
-Hive box, or a previous key scheme — seed the storage with
-`HydratedMobX.importData` after storage is set and before you construct the
-stores that should pick it up. Keys map to each store's `storageToken`,
-composed as `'$storagePrefix${storeId ?? id}'` (include the `storeId`/`id`
-component when the target store overrides it, and note that the default
-`storagePrefix` is `runtimeType`, which is not stable under `--obfuscate` —
-override `storagePrefix` on such stores so the key matches). Existing keys are
-left untouched by default; pass `overwrite: true` to replace them.
+### Rebuilding a storage
 
-If the store uses schema versioning (`version > 1`), pass the `version` of the
-data you are importing so it is not needlessly run through `migrate`; leave it
-at the default (`1`) for legacy data that should be migrated forward.
+To close a storage and open it again while stores are live, move them over:
 
 ```dart
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  HydratedMobX.storage = await HydratedStorage.build(
-    storageDirectory: HydratedStorageDirectory(
-      (await getApplicationDocumentsDirectory()).path,
-    ),
-  );
-
-  final prefs = await SharedPreferences.getInstance();
-  await HydratedMobX.importData({
-    'CounterStore': {'count': prefs.getInt('count') ?? 0},
-  });
-
-  final store = CounterStore(); // hydrates from the imported data
-  runApp(App());
-}
+await HydratedMobX.flushAll(storage: cache);
+await cache.close();
+final reopened = await HydratedStorage.build(
+  storageDirectory: directory,
+  boxName: 'cache',
+  trackUse: true,
+);
+HydratedMobX.rebindAll(from: cache, to: reopened);
+await reopened.evict(maxEntries: 200);
 ```
 
-### Observing persistence failures
+Evict after `rebindAll`, not while building: eviction stops the live stores of
+the keys it deletes, and only once they are bound to the new storage.
 
-State is persisted in the background (fire-and-forget), so a failing write never
-interrupts your store. To observe such failures — a full disk, an encryption
-error — pass an `onStorageError` handler. It defaults to logging the error.
+## Performance notes
 
-```dart
-class CounterStore extends HydratedMobX with Store {
-  CounterStore()
-      : super(
-          onStorageError: (error, stackTrace) {
-            FirebaseCrashlytics.instance.recordError(error, stackTrace);
-          },
-        ) {
-    hydrate();
-  }
-  // ...
-}
+- Each change runs `toJson` and the comparison on the calling isolate; the
+  Hive write itself is asynchronous. Use `persistDelay` for stores that change
+  often, and `trustToJson` for large ones.
+- `HydratedStorage` keeps its box in memory, which is what makes `read`
+  synchronous. Keep caches bounded with eviction rather than storing
+  everything in one box.
+- hive_ce's `IsolatedHive` is not used: its reads are asynchronous, which a
+  constructor-time hydration cannot wait for, and every write would still copy
+  the whole state to the other isolate from the calling one.
+
+## Example app
+
+[`example/`](example) has one screen per feature:
+
+| Screen | Shows |
+| --- | --- |
+| Counter | A store that survives a restart; `persistDelay` and `flush()` |
+| Keyed instances | One store type, one key per `storeId` |
+| Write stats | Writes counted through a `ForwardingStorage`: 100 changes, 1 write |
+| Namespaces | Session and account boxes; sign-out clears one; `clearAll(where:)` |
+| Schema migration | Seeding old data with `importData`; `migrate` upgrading or dropping it |
+| Eviction | A per-item cache bounded by `maxEntries` and `evictable` |
+| Observer & errors | Hydration, serialization and closed-storage errors in one log |
+| Storage inspector | Every key in every box, with delete and clear |
+| Encryption | An AES-256 box; the note is not in the file as plain text |
+| trustToJson | Time per write of a 2000-row state, with and without it |
+
+```sh
+cd example
+flutter run
 ```
 
-> **Note on multiple instances:** the default storage key is derived from the
-> store's `runtimeType`, so two live instances of the same store type share one
-> key and overwrite each other. If you intentionally keep several instances of
-> the same type, override `id` (or pass `storeId`) to give each a distinct key.
+## Migrating from 1.x
 
-### Clearing, resuming, and disposing
+| 1.x | 2.0 |
+| --- | --- |
+| `storagePrefix` defaults to `runtimeType` | Required. Return the old class name (e.g. `'CounterStore'`) to keep reading 1.x data. |
+| `store.clear({resume})` | `store.clearPersisted({resume})` |
+| `Map<String, dynamic> migrate(...)` | `Map<String, dynamic>? migrate(...)`; `null` drops the data |
+| `defaultOnHydrationError`, `defaultOnStorageError` | `HydratedObserver`; per-store handlers are optional |
+| `Storage` had 5 members | Add `deleteAll` and `keys`; call `HydratedMobX.suspendAll(storage: this)` from `clear` |
+| `HydratedMobX.disposeAllForClear()` | `HydratedMobX.suspendAll(storage: ...)` |
+| A closed storage ignored writes and read as empty | Reads, writes and `keys` throw `StorageClosedException`; store failures go to the error handlers |
+| `HydratedStorage.hive` (testing hook) | Removed; each storage has its own Hive instance |
+| `.hydrated_bloc.json` imported at build | Removed; use `importData` |
+| Every change and every construction wrote | Unchanged state is not written |
 
-- `clear()` deletes the store's cached state and, by default, **stops**
-  persisting further changes.
-- `clear(resume: true)` deletes the cached state but keeps persisting, so
-  subsequent changes are saved again.
-- `dispose()` permanently stops persistence and removes the store from the
-  internal registry so it can be garbage collected. Call it when the store is
-  no longer used (e.g. from the owning widget's `dispose`); the on-disk state is
-  left untouched.
+Stored data needs no conversion: 1.x boxes open as they are, under the default
+`boxName`, as long as the storage is built in the same directory as before.
 
-```dart
-await store.clear();              // wipe cache, stop persisting
-await store.clear(resume: true);  // wipe cache, keep persisting
-store.dispose();                  // stop persisting for good, keep stored data
-```
+## More
 
-**Call `dispose()` when a store is scoped to a widget.** A persisting store is
-kept alive by its internal MobX reaction (this is how it observes changes), so a
-store you simply drop is not garbage-collected until that reaction is released.
-Calling `dispose()` releases it immediately. For a store owned by a `State`,
-dispose it from the widget's `dispose`:
-
-```dart
-class _MyPageState extends State<MyPage> {
-  final store = CounterStore();
-
-  @override
-  void dispose() {
-    store.dispose();
-    super.dispose();
-  }
-
-  // ...
-}
-```
-
-Long-lived, app-wide singleton stores don't need this — they live for the
-whole session by design.
-
-## Additional information
-
-- For more information about MobX, visit the [MobX documentation](https://mobx.netlify.app/)
-- For issues and feature requests, please visit the [GitHub repository](https://github.com/NarekManukyan/hydrated_mobx)
-- Contributions are welcome! Feel free to submit pull requests or open issues
+- [MobX documentation](https://mobx.netlify.app/)
+- [Issues and feature requests](https://github.com/NarekManukyan/hydrated_mobx/issues)

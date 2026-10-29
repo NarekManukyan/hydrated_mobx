@@ -1,3 +1,5 @@
+import 'package:hydrated_mobx/src/plain_json.dart';
+
 /// Helpers for type-safe fromJson / toJson implementations to avoid manual
 /// type checks and try/catch when reading from `Map<String, dynamic>`.
 ///
@@ -24,31 +26,43 @@ class HydratedJson {
   HydratedJson._();
 
   /// Reads a list from [json] under [key]. Returns an empty list if the key is
-  /// missing, null, or not a [List]. Only list elements that are
-  /// [Map<String, dynamic>] are passed to [fromJson]; others are skipped.
+  /// missing, null, or not a [List]. Every element that is a [Map] is passed
+  /// to [fromJson] as a `Map<String, dynamic>`: as it is when it already is
+  /// one (everything `fromJson` receives is, deeply), otherwise converted
+  /// deeply. Other elements are skipped.
   static List<T> readList<T>(
     Map<String, dynamic> json,
     String key,
     T Function(Map<String, dynamic>) fromJson,
   ) {
     final value = json[key];
-    if (value == null) return <T>[];
     if (value is! List) return <T>[];
-    return value.whereType<Map<String, dynamic>>().map<T>(fromJson).toList();
+    return [
+      for (final item in value)
+        if (item is Map) fromJson(_stringKeyed(item)),
+    ];
   }
 
   /// Reads a single object from [json] under [key]. Returns null if the key is
-  /// missing, the value is null, the value is not a [Map<String, dynamic>], or
-  /// [fromJson] returns null.
+  /// missing, the value is not a [Map], or [fromJson] returns null. The map
+  /// is passed on as a `Map<String, dynamic>`, converted deeply unless it
+  /// already is one.
   static T? readObject<T>(
     Map<String, dynamic> json,
     String key,
     T? Function(Map<String, dynamic>) fromJson,
   ) {
     final value = json[key];
-    if (value == null) return null;
-    if (value is! Map<String, dynamic>) return null;
-    return fromJson(value);
+    if (value is! Map) return null;
+    return fromJson(_stringKeyed(value));
+  }
+
+  /// Reads a list of strings from [json] under [key], skipping elements that
+  /// are not strings. Returns an empty list if the value is not a [List].
+  static List<String> readStringList(Map<String, dynamic> json, String key) {
+    final value = json[key];
+    if (value is! List) return <String>[];
+    return value.whereType<String>().toList();
   }
 
   /// Reads a [String] from [json] under [key].
@@ -109,4 +123,11 @@ class HydratedJson {
     if (list == null) return <dynamic>[];
     return list.map<dynamic>(toJson).toList();
   }
+
+  /// [map] as a deep `Map<String, dynamic>`. A map that already is one
+  /// (as everything `fromJson` receives is) is used as it is.
+  static Map<String, dynamic> _stringKeyed(Map<dynamic, dynamic> map) =>
+      map is Map<String, dynamic>
+          ? map
+          : plainJson(map)! as Map<String, dynamic>;
 }

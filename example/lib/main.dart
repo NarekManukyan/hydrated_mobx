@@ -1,162 +1,48 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:hydrated_mobx/hydrated_mobx.dart';
-import 'package:hydrated_mobx_example/counter_store.dart';
-import 'package:hydrated_mobx_example/keyed_counter_store.dart';
 import 'package:path_provider/path_provider.dart';
 
-void main() async {
+import 'app/app_observer.dart';
+import 'app/app_storages.dart';
+import 'pages/home_page.dart';
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize storage
-  final appDocumentDir = await getApplicationDocumentsDirectory();
-  HydratedMobX.storage = await HydratedStorage.build(
-    storageDirectory: HydratedStorageDirectory(appDocumentDir.path),
-  );
+  // An app upgrading from 1.x keeps the directory it used before (the 1.x
+  // docs used Documents); a new one opens an empty box.
+  final directory = await getApplicationSupportDirectory();
+  appStorages = await AppStorages.build(directory.path);
+  // The default storage for stores built without `storage:`.
+  HydratedMobX.storage = appStorages.main;
+  // One place for every store's errors and migrations.
+  HydratedMobX.observer = appObserver;
 
-  runApp(const MyApp());
+  // Write state that a persistDelay is still holding back before the OS may
+  // kill the backgrounded app.
+  AppLifecycleListener(onPause: HydratedMobX.flushAll);
+
+  runApp(const HydratedMobXExampleApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class HydratedMobXExampleApp extends StatelessWidget {
+  const HydratedMobXExampleApp({super.key});
 
   @override
   Widget build(BuildContext context) {
+    ThemeData theme(Brightness brightness) => ThemeData(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: Colors.deepPurple,
+        brightness: brightness,
+      ),
+      useMaterial3: true,
+    );
     return MaterialApp(
-      title: 'Hydrated MobX Example',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-        useMaterial3: true,
-      ),
-      initialRoute: '/',
-      routes: <String, WidgetBuilder>{
-        '/': (_) => const CounterPage(),
-        '/keyed': (_) => const KeyedCounterPage(),
-      },
-    );
-  }
-}
-
-class CounterPage extends StatefulWidget {
-  const CounterPage({super.key});
-
-  @override
-  State<CounterPage> createState() => _CounterPageState();
-}
-
-class _CounterPageState extends State<CounterPage> {
-  late final CounterStore counter = CounterStore();
-
-  @override
-  void dispose() {
-    counter.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: const Text('Hydrated Counter'),
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
-            ),
-            Observer(
-              builder: (_) => Text(
-                '${counter.count}',
-                style: Theme.of(context).textTheme.headlineMedium,
-              ),
-            ),
-          ],
-        ),
-      ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          FloatingActionButton(
-            heroTag: 'counter_increment',
-            onPressed: counter.increment,
-            tooltip: 'Increment',
-            child: const Icon(Icons.add),
-          ),
-          const SizedBox(height: 16),
-          FloatingActionButton(
-            heroTag: 'counter_decrement',
-            onPressed: counter.decrement,
-            tooltip: 'Decrement',
-            child: const Icon(Icons.remove),
-          ),
-        ],
-      ),
-      bottomNavigationBar: ListTile(
-        title: const Text('Open scoped counter (id override example)'),
-        onTap: () => Navigator.of(context).pushNamed('/keyed'),
-      ),
-    );
-  }
-}
-
-class KeyedCounterPage extends StatefulWidget {
-  const KeyedCounterPage({super.key});
-
-  @override
-  State<KeyedCounterPage> createState() => _KeyedCounterPageState();
-}
-
-class _KeyedCounterPageState extends State<KeyedCounterPage> {
-  late final KeyedCounterStore store = KeyedCounterStore(storeId: 'demo-scope');
-
-  @override
-  void dispose() {
-    store.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        title: const Text('Keyed counter (storageId override)'),
-      ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('This store uses super(scopeKey) so storage key is unique.'),
-            Observer(
-              builder: (_) => Text(
-                '${store.count}',
-                style: Theme.of(context).textTheme.headlineMedium,
-              ),
-            ),
-          ],
-        ),
-      ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          FloatingActionButton(
-            heroTag: 'keyed_increment',
-            onPressed: store.increment,
-            tooltip: 'Increment',
-            child: const Icon(Icons.add),
-          ),
-          const SizedBox(height: 16),
-          FloatingActionButton(
-            heroTag: 'keyed_decrement',
-            onPressed: store.decrement,
-            tooltip: 'Decrement',
-            child: const Icon(Icons.remove),
-          ),
-        ],
-      ),
+      title: 'hydrated_mobx',
+      debugShowCheckedModeBanner: false,
+      theme: theme(Brightness.light),
+      darkTheme: theme(Brightness.dark),
+      home: const HomePage(),
     );
   }
 }
