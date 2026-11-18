@@ -27,6 +27,13 @@
   type name or, in obfuscated builds, by the shape of the stored JSON, for
   `moveTokens`.
 
+### Fixed
+
+- `HydratedStorage.read` and `keys` treat a key as gone from the moment a
+  delete or `clear` naming it is queued, so a store built while the delete
+  waits for an earlier write no longer hydrates state that then disappears
+  from disk.
+
 ## [2.0.0] - 2026-10-29
 
 See "Migrating from 1.x" in the README for the upgrade steps.
