@@ -23,7 +23,7 @@ class PendingChanges {
   final _clears = <int>[];
 
   /// Whether nothing is queued now.
-  bool get isEmpty => _writes.isEmpty && _deletes.isEmpty && _clears.isEmpty;
+  bool get _isEmpty => _writes.isEmpty && _deletes.isEmpty && _clears.isEmpty;
 
   /// When the latest queued delete or clear naming [key] was called.
   /// Both lists hold calls in the order they were made, so the last of
@@ -72,7 +72,7 @@ class PendingChanges {
     Iterable<String> stored, {
     required bool Function(String key) holds,
   }) {
-    if (isEmpty) return stored;
+    if (_isEmpty) return stored;
     return [
       for (final key in stored)
         if (!hides(key)) key,

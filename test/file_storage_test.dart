@@ -302,6 +302,37 @@ void main() {
     await disk.close();
   });
 
+  test('a key too long for a file name is never shown, even while queued',
+      () async {
+    final disk = await build(maxEntries: 5);
+    await disk.write('a', 1);
+    // Holds the lock, so what comes after it queues.
+    final busy = disk.write('busy', 1);
+    final evicting = disk.evict(maxEntries: 5);
+    final tooLong = 'k' * 145;
+
+    final writing = disk.write(tooLong, 1);
+    expect(disk.read(tooLong), isNull);
+    expect(disk.keys, isNot(contains(tooLong)));
+    await expectLater(writing, throwsArgumentError);
+    await busy;
+    await evicting;
+    expect(disk.keys.toSet(), {'a', 'busy'});
+    await disk.close();
+  });
+
+  test('keys may be deleted while going through them', () async {
+    final disk = await build();
+    for (final key in ['a', 'b', 'c']) {
+      await disk.write(key, 1);
+    }
+    for (final key in disk.keys) {
+      await disk.delete(key);
+    }
+    expect(disk.keys, isEmpty);
+    await disk.close();
+  });
+
   test('one storage at a time per directory', () async {
     final disk = await build();
     await expectLater(build(), throwsStateError);

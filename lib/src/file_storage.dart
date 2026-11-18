@@ -383,16 +383,18 @@ class FileStorage implements UseTimeStorage {
   @override
   Future<void> write(String key, dynamic value) => Future.sync(() {
         _checkOpen('write');
+        // Both throw before the write is queued, so read and keys never
+        // show a write that cannot land.
+        final file = _fileOf(key);
         final bytes = _codec.encode(value)! as Uint8List;
         return _pending.write(
           key,
           bytes,
-          () => _locked('write', () => _writeFile(key, bytes)),
+          () => _locked('write', () => _writeFile(key, file, bytes)),
         );
       });
 
-  Future<void> _writeFile(String key, Uint8List bytes) async {
-    final file = _fileOf(key);
+  Future<void> _writeFile(String key, File file, Uint8List bytes) async {
     final temp = File('${file.path}$_tempExtension');
     try {
       await temp.writeAsBytes(bytes, flush: true);
