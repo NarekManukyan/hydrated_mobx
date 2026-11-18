@@ -468,7 +468,8 @@ class FileStorage implements UseTimeStorage {
         _pending.hides(key)) {
       return null;
     }
-    return DateTime.fromMillisecondsSinceEpoch(_usedAtOf(key));
+    final usedAt = _knownUsedAt(key);
+    return usedAt == null ? null : DateTime.fromMillisecondsSinceEpoch(usedAt);
   }
 
   /// Records [time], or now if it is later, as [key]'s use time, when this
@@ -577,14 +578,21 @@ class FileStorage implements UseTimeStorage {
           }(),
       ];
 
-  int _usedAtOf(String key) {
+  /// [key]'s use time for ranking: one that cannot be read counts as now,
+  /// as a key without one does in `HydratedStorage.evict`.
+  int _usedAtOf(String key) =>
+      _knownUsedAt(key) ?? _clock().millisecondsSinceEpoch;
+
+  /// [key]'s use time (ms since epoch), from its file's modification time,
+  /// or `null` when that cannot be read.
+  int? _knownUsedAt(String key) {
     final known = _usedAt[key];
     if (known != null) return known;
     try {
       final modified = _fileOf(key).lastModifiedSync();
       return _usedAt[key] = modified.millisecondsSinceEpoch;
     } on FileSystemException {
-      return _clock().millisecondsSinceEpoch;
+      return null;
     }
   }
 }

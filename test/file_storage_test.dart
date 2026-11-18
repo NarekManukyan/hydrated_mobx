@@ -437,6 +437,20 @@ void main(List<String> args) {
     await disk.close();
   });
 
+  test('usedAt is null when the use time cannot be read', () async {
+    var disk = await build();
+    await disk.write('a', 1);
+    await disk.close();
+    disk = await build();
+    // Deleted behind the storage's back, so its time is not known.
+    for (final name in files()) {
+      File('${dir.path}/$name').deleteSync();
+    }
+
+    expect(disk.usedAt('a'), isNull);
+    await disk.close();
+  });
+
   test('markUsed keeps a key from looking stale', () async {
     var disk = await build();
     await disk.write('a', 1);
