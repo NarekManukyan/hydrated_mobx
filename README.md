@@ -605,7 +605,12 @@ LegacyTokens.match(stores, reservedPrefixes: ['settings', 'draft_'])
 ```
 
 With a variable-length `idPattern` such as `RegExp(r'\d+')`, the longest id
-the pattern accepts is taken: `Qz123` moves to id `123`.
+the pattern accepts is taken: `Qz123` moves to id `123`. The pattern is
+anchored for you, so a leading `^` or trailing `$` is ignored.
+
+A 1.x type name longer than a prefix it starts with still moves: a store now
+under `Counter` finds its old `CounterStore` key. Keys whose name no listed
+store could have written, such as `some.key`, are never read.
 
 `moveTokens` takes any `(token, value) => newToken?`, so it also handles a
 renamed `storagePrefix`. `value` is a function that reads the stored value, so
