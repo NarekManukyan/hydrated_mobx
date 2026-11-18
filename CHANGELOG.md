@@ -16,6 +16,11 @@
 - `Storage.deleteAll` no longer promises one operation: a storage that
   cannot do that deletes one key at a time, state keys before their version
   keys.
+- The `Storage` contract asks more of a storage whose `deleteAll` or `clear`
+  can wait behind other work (a lock, a queue): its `read` and `keys` must
+  treat a key as gone from the moment a delete or clear naming it is called.
+  A storage that deletes synchronously, like `InMemoryStorage`, already
+  does.
 
 ### Added
 
@@ -57,10 +62,10 @@
 
 ### Fixed
 
-- `HydratedStorage.read` and `keys` (and `FileStorage`'s) treat a key as
-  gone from the moment a delete or `clear` naming it is queued, so a store
-  built while the delete waits for an earlier write no longer hydrates
-  state that then disappears from disk.
+- `HydratedStorage.read` and `keys` treat a key as gone from the moment a
+  delete or `clear` naming it is queued, so a store built while the delete
+  waits for an earlier write no longer hydrates state that then disappears
+  from disk.
 
 ## [2.0.0] - 2026-10-29
 

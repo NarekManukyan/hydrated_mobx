@@ -4,7 +4,6 @@ import 'dart:async';
 import 'dart:developer';
 
 import 'package:hydrated_mobx/src/hydrated_storage.dart';
-import 'package:hydrated_mobx/src/legacy_tokens.dart';
 import 'package:hydrated_mobx/src/plain_json.dart';
 import 'package:meta/meta.dart';
 import 'package:mobx/mobx.dart';
@@ -162,7 +161,7 @@ abstract class HydratedMobX with Store {
 
   /// Moves stored state to new tokens, e.g. after renaming a
   /// [storagePrefix] or leaving 1.x's `runtimeType` keys (see
-  /// [LegacyTokens]).
+  /// `LegacyTokens`).
   ///
   /// [to] is asked for the new token of every state key in [storage] (the
   /// global one by default); `null` or the same key leaves it where it is.
