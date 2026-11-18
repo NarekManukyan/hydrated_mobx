@@ -376,8 +376,15 @@ class FileStorage implements UseTimeStorage {
           _cachePut(key, bytes);
           // The rename left the file the time of this write. Its use time is
           // set as the clock reads it, and at most once per use resolution,
-          // as [markUsed] does.
-          if (_dueStamp(key)) await _setUsed(key, file);
+          // as [markUsed] does. Best effort: the value is written, and a
+          // lost use time only leaves the file the time of the rename.
+          if (_dueStamp(key)) {
+            try {
+              await _setUsed(key, file);
+            } on FileSystemException {
+              // See above.
+            }
+          }
         });
       });
 

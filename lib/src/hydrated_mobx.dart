@@ -308,7 +308,10 @@ abstract class HydratedMobX with Store {
   }
 
   /// Gives [to] in [target] the use time of [from] in [source], when both
-  /// keep use times.
+  /// keep use times. Best effort, like every use time: the state is already
+  /// in [target], and failing the move now would leave it in both storages,
+  /// so a use time that cannot be carried only makes [to] look used at the
+  /// move.
   static Future<void> _carryUseTime(
     Storage source,
     String from,
@@ -316,8 +319,12 @@ abstract class HydratedMobX with Store {
     String to,
   ) async {
     if (source is UseTimeStorage && target is UseTimeStorage) {
-      if (source.usedAt(from) case final usedAt?) {
-        await target.setUsedAt(to, usedAt);
+      try {
+        if (source.usedAt(from) case final usedAt?) {
+          await target.setUsedAt(to, usedAt);
+        }
+      } on Object {
+        // See above.
       }
     }
   }

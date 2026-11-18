@@ -31,6 +31,15 @@ class _Note extends HydratedMobX with Store {
       _text.value = json['text'] as String;
 }
 
+/// Fails every attempt to set a use time.
+class _NoUseTimes extends ForwardingStorage {
+  _NoUseTimes(super.inner);
+
+  @override
+  Future<void> setUsedAt(String key, DateTime time) =>
+      Future.error(const FileSystemException('read-only'));
+}
+
 /// Fails every write of one token's state.
 class _FailingStorage extends ForwardingStorage {
   _FailingStorage(super.inner, {required this.failing});
@@ -690,6 +699,56 @@ void main(List<String> args) {
       // The two used last survive, not the two first by key.
       disk = await build(maxEntries: 2);
       expect(disk.keys.toSet(), {'note_a', 'note_b'});
+      await disk.close();
+    });
+
+    test('keeps use times through a ForwardingStorage', () async {
+      final boxDir = await Directory.systemTemp.createTemp('hydrated_box_');
+      addTearDown(() => boxDir.delete(recursive: true));
+      final box = await HydratedStorage.build(
+        storageDirectory: HydratedStorageDirectory(boxDir.path),
+        trackUse: true,
+        clock: () => now,
+      );
+      now = DateTime(2025);
+      await box.write('note_1', {'text': 'a'});
+      now = DateTime(2026, 2);
+      final disk = await build();
+
+      await HydratedMobX.transferTokens(
+        from: ForwardingStorage(box),
+        to: ForwardingStorage(disk),
+        where: (_) => true,
+      );
+
+      expect(disk.usedAt('note_1'), DateTime(2025));
+      // And back, through the wrapper's usedAt.
+      expect(ForwardingStorage(disk).usedAt('note_1'), DateTime(2025));
+      await box.close();
+      await disk.close();
+    });
+
+    test('a use time that cannot be carried does not fail the move', () async {
+      final boxDir = await Directory.systemTemp.createTemp('hydrated_box_');
+      addTearDown(() => boxDir.delete(recursive: true));
+      final box = await HydratedStorage.build(
+        storageDirectory: HydratedStorageDirectory(boxDir.path),
+        trackUse: true,
+        clock: () => now,
+      );
+      await box.write('note_1', {'text': 'a'});
+      final disk = await build();
+
+      final moved = await HydratedMobX.transferTokens(
+        from: box,
+        to: _NoUseTimes(disk),
+        where: (_) => true,
+      );
+
+      expect(moved, {'note_1'});
+      expect(box.keys, isEmpty);
+      expect(disk.read('note_1'), {'text': 'a'});
+      await box.close();
       await disk.close();
     });
 
