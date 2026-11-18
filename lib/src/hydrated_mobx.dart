@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:developer';
 
 import 'package:hydrated_mobx/src/hydrated_storage.dart';
+import 'package:hydrated_mobx/src/legacy_tokens.dart';
 import 'package:hydrated_mobx/src/plain_json.dart';
 import 'package:meta/meta.dart';
 import 'package:mobx/mobx.dart';
@@ -157,6 +158,70 @@ abstract class HydratedMobX with Store {
       }
       await target.write(entry.key, entry.value);
     }
+  }
+
+  /// Moves stored state to new tokens, e.g. after renaming a
+  /// [storagePrefix] or leaving 1.x's `runtimeType` keys (see
+  /// [LegacyTokens]).
+  ///
+  /// [to] is asked for the new token of every state key in [storage] (the
+  /// global one by default), given its stored value; `null` or the same key
+  /// leaves it where it is. The state moves with its version key. Returns the
+  /// moves made, old token to new.
+  ///
+  /// Nothing is overwritten. A move is skipped when:
+  /// - the new token already holds different state, or a stale version key
+  ///   only (which is replaced);
+  /// - two keys would move to the same token;
+  /// - a live store uses either token, since it would not see the move.
+  ///
+  /// When the new token already holds the same state, the old key is
+  /// deleted; that is how an interrupted run finishes. Each move writes the
+  /// version, then the state, then deletes the old keys, so it is safe to run
+  /// again after a crash. Call it at startup, before constructing the stores.
+  static Future<Map<String, String>> moveTokens(
+    String? Function(String token, Object? value) to, {
+    Storage? storage,
+  }) async {
+    final target = storage ?? HydratedMobX.storage;
+    final live = liveTokens(storage: target);
+    final existing = target.keys.toSet();
+    final planned = <String, String>{};
+    final clashing = <String>{};
+    for (final key in existing) {
+      if (isVersionKey(key) || live.contains(key)) continue;
+      final next = to(key, target.read(key));
+      if (next == null || next == key || live.contains(next)) continue;
+      if (isVersionKey(next)) {
+        throw ArgumentError.value(next, 'to', 'returned a version key');
+      }
+      if (planned.containsValue(next)) clashing.add(next);
+      planned[key] = next;
+    }
+    final moved = <String, String>{};
+    for (final MapEntry(key: from, value: next) in planned.entries) {
+      if (clashing.contains(next)) continue;
+      final value = target.read(from);
+      final fromVersion = versionKeyOf(from);
+      if (existing.contains(next)) {
+        if (!_jsonEquals(target.read(next), value) ||
+            target.read(versionKeyOf(next)) != target.read(fromVersion)) {
+          continue;
+        }
+      } else {
+        final version = target.read(fromVersion);
+        if (version != null) {
+          await target.write(versionKeyOf(next), version);
+        } else {
+          // An absent key reads as version 1; drop one left behind.
+          await target.delete(versionKeyOf(next));
+        }
+        await target.write(next, value);
+      }
+      await target.deleteAll([from, fromVersion]);
+      moved[from] = next;
+    }
+    return moved;
   }
 
   /// Wipes persisted state from [storage] (the global one by default).

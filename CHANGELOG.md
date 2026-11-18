@@ -12,6 +12,12 @@
 - `HydratedStorage.build(initialUseTime:)` dates keys that have no use time
   yet from their stored value, so the first eviction after turning tracking
   on ranks them instead of treating all of them as used at that launch.
+- `HydratedMobX.moveTokens(to)` moves stored state to new tokens, with its
+  version key, without overwriting anything, and safe to run again after a
+  crash.
+- `LegacyTokens.match([LegacyStore(...)])` finds 1.x `runtimeType` keys, by
+  type name or, in obfuscated builds, by the shape of the stored JSON, for
+  `moveTokens`.
 
 ## [2.0.0] - 2026-10-29
 

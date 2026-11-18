@@ -500,6 +500,41 @@ flutter run
 Stored data needs no conversion: 1.x boxes open as they are, under the default
 `boxName`, as long as the storage is built in the same directory as before.
 
+### Obfuscated builds
+
+1.x keyed each store by `runtimeType`. In an obfuscated build (Android
+release with `--obfuscate`) that is a short generated name, and the obfuscator
+picks a different one whenever the code around the class changes. Returning
+`'$CounterStore'` from `storagePrefix` then rarely finds the old key. Move
+the state onto fixed prefixes once, at startup, before any store exists:
+
+```dart
+await HydratedMobX.moveTokens(LegacyTokens.match([
+  LegacyStore(
+    prefix: 'user',
+    legacyPrefix: '$UserStore',
+    keys: ['currentUser', 'settings'],
+  ),
+  LegacyStore(
+    prefix: 'chat_',
+    legacyPrefix: '$ChatStore',
+    keys: ['messages'],
+    idPattern: RegExp('[0-9a-f]{32}'), // one key per chat id
+  ),
+]));
+```
+
+`LegacyTokens.match` finds a key by this build's `'$Type'` when the name
+survived, and otherwise by the shape of its value: a key that looks like a
+class name (plus an id, for a keyed store) whose top-level JSON keys fit
+exactly one store. A name the obfuscator gave to another class never moves one
+store's state onto another, because the shape has to fit either way.
+
+`moveTokens` takes any `(token, value) => newToken?`, so it also handles a
+renamed `storagePrefix`. It moves the version key along, never overwrites
+different state, skips tokens of live stores, and can run again after a crash.
+It returns the moves it made.
+
 ## More
 
 - [MobX documentation](https://mobx.netlify.app/)
