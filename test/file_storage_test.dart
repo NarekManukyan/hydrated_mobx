@@ -194,6 +194,35 @@ void main() {
     skip: Platform.isWindows ? 'needs chmod' : null,
   );
 
+  test('preload forgets a key whose file was deleted behind its back',
+      () async {
+    var disk = await build(encoding: HydratedEncoding.json);
+    final fileOf = <String, String>{};
+    for (final (key, value) in [
+      ('a', _doc(60)),
+      ('a.__version', 2),
+      ('b', _doc(60)),
+      ('b.__version', 2),
+    ]) {
+      final before = files().toSet();
+      await disk.write(key, value);
+      fileOf[key] = files().toSet().difference(before).single;
+    }
+    await disk.close();
+
+    disk = await build(encoding: HydratedEncoding.json);
+    for (final key in ['a', 'b.__version']) {
+      File('${dir.path}/${fileOf[key]}').deleteSync();
+    }
+    await disk.preload('a');
+    await disk.preload('b');
+
+    expect(disk.keys.toSet(), {'a.__version', 'b'});
+    expect(disk.read('a'), isNull);
+    expect(disk.read('b'), _doc(60));
+    await disk.close();
+  });
+
   test('preload makes a cached value the most recently used', () async {
     final probe = await build(encoding: HydratedEncoding.json);
     await probe.write('x', _doc(60));

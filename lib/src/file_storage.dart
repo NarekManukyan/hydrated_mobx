@@ -593,16 +593,16 @@ class FileStorage implements UseTimeStorage {
 
   /// The modification time (ms since epoch) of each file in [paths], `null`
   /// for one that cannot be read.
-  static List<int?> _modifiedTimes(List<String> paths) => [
-        for (final path in paths)
-          () {
-            try {
-              return File(path).lastModifiedSync().millisecondsSinceEpoch;
-            } on FileSystemException {
-              return null;
-            }
-          }(),
-      ];
+  static List<int?> _modifiedTimes(List<String> paths) =>
+      [for (final path in paths) _modifiedTime(path)];
+
+  static int? _modifiedTime(String path) {
+    try {
+      return File(path).lastModifiedSync().millisecondsSinceEpoch;
+    } on FileSystemException {
+      return null;
+    }
+  }
 
   /// [key]'s use time for ranking: one that cannot be read counts as now,
   /// as a key without one does in `HydratedStorage.evict`.
