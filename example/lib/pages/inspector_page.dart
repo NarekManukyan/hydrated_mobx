@@ -13,8 +13,9 @@ class InspectorPage extends StatelessWidget {
     return DemoPage(
       title: 'Storage inspector',
       explainer:
-          'Every key in every box, live, via Storage.keys. Deleting '
-          'goes through HydratedMobX.deleteToken, which also removes the '
+          'Every key in every storage, live, via Storage.keys; large '
+          'storages list keys only. Deleting goes through '
+          'HydratedMobX.deleteToken, which also removes the '
           "key's version and stops a live store from writing it back.",
       children: [
         for (final MapEntry(key: name, value: (:storage, :large))

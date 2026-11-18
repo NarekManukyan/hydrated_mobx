@@ -15,7 +15,7 @@ says how to turn its state into JSON and back, and survives app restarts.
 | <img src="doc/screenshots/03_write_stats.webp" width="220" alt="Write stats"> | <img src="doc/screenshots/04_namespaces.webp" width="220" alt="Namespaces"> | <img src="doc/screenshots/05_migration.webp" width="220" alt="Schema migration"> |
 | Writes saved by `persistDelay` and change detection | Session and account boxes | `migrate` renames a field |
 | <img src="doc/screenshots/06_eviction.webp" width="220" alt="Eviction"> | <img src="doc/screenshots/07_observer.webp" width="220" alt="Observer"> | <img src="doc/screenshots/08_inspector.webp" width="220" alt="Storage inspector"> |
-| `maxEntries` keeps the 5 latest | One observer for every store | Every key in every box |
+| `maxEntries` keeps the 5 latest | One observer for every store | Every key in every storage |
 
 The screens come from the [example app](example), one per feature area.
 
@@ -426,7 +426,8 @@ final store = NoteStore(id, storage: notes);
   read from its file there and then, which blocks for that read (0.6 ms for
   a 146 KB note in the benchmark, on a Mac; measure on your devices).
 - The last `cacheBytes` (8 MB by default) of encoded values read or written
-  stay in memory.
+  stay in memory. A value larger than that is never kept, so `preload` skips
+  it and the store reads it from its file.
 - A write goes to a temporary file that is renamed over the old one, so a
   crash keeps the old value or the new one. `deleteAll` and `clear` delete
   one file at a time, each state key before its version key: a crash midway
@@ -442,8 +443,10 @@ final store = NoteStore(id, storage: notes);
 - The storage holds that lock until it is closed. iOS terminates a
   suspended app that holds a file lock in an app-group container, so a
   `FileStorage` kept there must be closed when the app goes to the
-  background and built again when it returns. A directory inside the app's
-  own container is not affected.
+  background and built again when it returns. Live stores stay bound to the
+  closed storage, so flush them before closing and move them to the new one
+  with `rebindAll`, as in [Rebuilding a storage](#rebuilding-a-storage). A
+  directory inside the app's own container is not affected.
 - File names are the key in lowercase base32, so keys that differ only in
   case stay apart on macOS and Windows. A state key can be up to 144 bytes
   of UTF-8, which leaves room for its version key.
@@ -618,7 +621,7 @@ the keys it deletes, and only once they are bound to the new storage.
 | Schema migration | Seeding old data with `importData`; `migrate` upgrading or dropping it |
 | Eviction | A per-item cache bounded by `maxEntries` and `evictable` |
 | Observer & errors | Hydration, serialization and closed-storage errors in one log |
-| Storage inspector | Every key in every box, with delete and clear |
+| Storage inspector | Every key in every storage, with delete and clear |
 | Encryption | An AES-256 box; the note is not in the file as plain text |
 | trustToJson | Time per write of a 2000-row state, with and without it |
 | Large state | Notes kept gzipped in a box, moved to a `FileStorage` with `transferTokens`, opened with `preload` |

@@ -48,7 +48,9 @@ import 'package:synchronized/synchronized.dart';
 /// share its file lock and do not share statics, so the app must keep a
 /// directory to one isolate. The lock is held until [close]; iOS terminates
 /// a suspended app that holds a file lock in an app-group container, so
-/// close a storage kept there when the app goes to the background. Not
+/// close a storage kept there when the app goes to the background: call
+/// [HydratedMobX.flushAll] for it first, and when the app returns, build it
+/// again and move live stores over with [HydratedMobX.rebindAll]. Not
 /// available on the web.
 /// {@endtemplate}
 class FileStorage implements UseTimeStorage {
@@ -323,12 +325,20 @@ class FileStorage implements UseTimeStorage {
   int get cachedBytes => _cachedBytes;
 
   /// Reads [key] (and its version key) into memory, so that a store
-  /// constructed next hydrates without touching the disk.
+  /// constructed next hydrates without touching the disk. A value larger
+  /// than `cacheBytes` is not kept in memory, so it is not read here either:
+  /// the store reads it from its file.
   Future<void> preload(String key) => _locked('preload', () async {
         for (final k in [key, HydratedMobX.versionKeyOf(key)]) {
-          if (!_keys.contains(k) || _cache.containsKey(k)) continue;
+          if (!_keys.contains(k)) continue;
+          if (_cache.remove(k) case final bytes?) {
+            _cache[k] = bytes; // Most recently used now.
+            continue;
+          }
           try {
-            _cachePut(k, await _fileOf(k).readAsBytes());
+            final file = _fileOf(k);
+            if (await file.length() > _cacheLimit) continue;
+            _cachePut(k, await file.readAsBytes());
           } on PathNotFoundException {
             _keys.remove(k); // Deleted behind this storage's back.
           }

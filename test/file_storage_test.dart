@@ -73,6 +73,7 @@ void main() {
     int cacheBytes = FileStorage.defaultCacheBytes,
     int? maxEntries,
     Duration? maxAge,
+    bool Function(String key)? evictable,
   }) =>
       FileStorage.build(
         storageDirectory: HydratedStorageDirectory(dir.path),
@@ -80,6 +81,7 @@ void main() {
         cacheBytes: cacheBytes,
         maxEntries: maxEntries,
         maxAge: maxAge,
+        evictable: evictable,
         clock: () => now,
       );
 
@@ -162,6 +164,56 @@ void main() {
     }
     expect(disk.read('a'), _doc(60));
     expect(disk.read('c'), _doc(60));
+    expect(disk.read('b'), isNull);
+    await disk.close();
+  });
+
+  test(
+    'preload does not read a value too large to keep in memory',
+    () async {
+      var disk = await build(encoding: HydratedEncoding.json);
+      await disk.write('huge', _doc(2000));
+      await disk.close();
+
+      // An unreadable file shows that preload never reads it: only its
+      // size is looked up.
+      final file = dir.listSync().whereType<File>().singleWhere(
+            (file) => file.uri.pathSegments.last != '.lock',
+          );
+      Process.runSync('chmod', ['000', file.path]);
+      addTearDown(() => Process.runSync('chmod', ['644', file.path]));
+
+      disk = await build(encoding: HydratedEncoding.json, cacheBytes: 5000);
+      await disk.preload('huge');
+      expect(disk.cachedBytes, 0);
+
+      Process.runSync('chmod', ['644', file.path]);
+      expect(disk.read('huge'), _doc(2000));
+      await disk.close();
+    },
+    skip: Platform.isWindows ? 'needs chmod' : null,
+  );
+
+  test('preload makes a cached value the most recently used', () async {
+    final probe = await build(encoding: HydratedEncoding.json);
+    await probe.write('x', _doc(60));
+    final size = probe.cachedBytes;
+    await probe.clear();
+    await probe.close();
+
+    final disk = await build(
+      encoding: HydratedEncoding.json,
+      cacheBytes: size * 2,
+    );
+    await disk.write('a', _doc(60));
+    await disk.write('b', _doc(60));
+    await disk.preload('a');
+    await disk.write('c', _doc(60));
+
+    for (final name in files()) {
+      File('${dir.path}/$name').deleteSync();
+    }
+    expect(disk.read('a'), _doc(60));
     expect(disk.read('b'), isNull);
     await disk.close();
   });
@@ -421,6 +473,22 @@ void main(List<String> args) {
     await live.flush();
     expect(await disk.evict(maxEntries: 0, keepLive: true), {'mid', 'new'});
     expect(disk.keys.toSet(), {'note_live', 'note_live.__version'});
+    await disk.close();
+  });
+
+  test('build evicts only keys evictable accepts', () async {
+    var disk = await build();
+    for (final key in ['pinned', 'cached']) {
+      await disk.write(key, {'k': key});
+      await disk.write('$key.__version', 2);
+    }
+    await disk.close();
+
+    disk = await build(
+      maxEntries: 0,
+      evictable: (key) => !key.startsWith('pinned'),
+    );
+    expect(disk.keys.toSet(), {'pinned', 'pinned.__version'});
     await disk.close();
   });
 
