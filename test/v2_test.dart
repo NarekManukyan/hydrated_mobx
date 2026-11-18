@@ -880,6 +880,25 @@ void main() {
       await disk.close();
     });
 
+    test('an initialUseTime that throws counts as used at build', () async {
+      final hive = Hive..init(dir.path);
+      final legacy = await hive.openBox<dynamic>('throwing');
+      await legacy.put('dated', {'openedAt': '2025-01-01'});
+      await legacy.put('undated', {'title': 'x'});
+      await legacy.close();
+
+      final disk = await build(
+        boxName: 'throwing',
+        maxEntries: 1,
+        // Throws on a map without the field.
+        initialUseTime: (key, value) =>
+            DateTime.parse((value as Map)['openedAt'] as String),
+      );
+
+      expect(disk.keys, ['undated']);
+      await disk.close();
+    });
+
     test('an initialUseTime in the future counts as now', () async {
       final hive = Hive..init(dir.path);
       final legacy = await hive.openBox<dynamic>('future');

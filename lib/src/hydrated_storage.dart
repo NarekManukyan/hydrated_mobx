@@ -208,8 +208,8 @@ class HydratedStorage implements UseTrackingStorage {
   /// - [initialUseTime] gives keys that have no use time yet (state written
   ///   before tracking was turned on) one from their stored value, e.g. a
   ///   last-opened or created-at field, so the first eviction ranks them by
-  ///   it. Keys it returns `null` for count as used at build, and a time
-  ///   after now counts as now.
+  ///   it. Keys it returns `null` for, or throws for, count as used at
+  ///   build, and a time after now counts as now.
   /// - [encoding] keeps state of more than [encodeAbove] bytes of JSON as
   ///   bytes rather than as maps and lists, which Hive would hold decoded in
   ///   memory for as long as the box is open. Each read then decodes it.
@@ -565,10 +565,21 @@ class HydratedStorage implements UseTrackingStorage {
     // keep [_dueStamp] from recording one until then.
     int stampOf(DateTime? time) =>
         time == null ? now : min(time.millisecondsSinceEpoch, now);
+    DateTime? timeOf(String key) {
+      if (initialUseTime == null) return null;
+      try {
+        return initialUseTime(key, _readForStamp(key));
+      } on Object {
+        // A callback that fails for one value would otherwise fail every
+        // build, as the key stays untracked until it gets a time.
+        return null;
+      }
+    }
+
     final untracked = {
       for (final key in keys)
         if (!HydratedMobX.isVersionKey(key) && !meta.containsKey(key))
-          key: stampOf(initialUseTime?.call(key, _readForStamp(key))),
+          key: stampOf(timeOf(key)),
     };
     if (untracked.isNotEmpty) await meta.putAll(untracked);
   }
