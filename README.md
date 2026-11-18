@@ -419,7 +419,8 @@ final store = NoteStore(id, storage: notes);
 
 - Opening lists the directory and reads no file. With `maxAge` or
   `maxEntries` it also evicts, which reads the modification time of every
-  file `evictable` accepts: one `stat` per file, at each launch.
+  file `evictable` accepts: one `stat` per file, at each launch, run in a
+  background isolate.
 - `read` stays synchronous. A key that was not preloaded or used lately is
   read from its file there and then, which blocks for that read (0.6 ms for
   a 146 KB note in the benchmark, on a Mac; measure on your devices).

@@ -452,6 +452,29 @@ void main(List<String> args) {
     await disk.close();
   });
 
+  test('a key written just before a clear stays hidden until it is wiped',
+      () async {
+    final disk = await build();
+    for (final key in ['a', 'b', 'c']) {
+      await disk.write(key, 1);
+    }
+    // Queued before the clear, so it lands first and the clear wipes it,
+    // one file at a time.
+    final writing = disk.write('new', 1);
+    final clearing = disk.clear();
+    final seen = <Object?>[];
+    final done = writing.then((_) {
+      seen
+        ..add(disk.read('new'))
+        ..add(disk.keys);
+    });
+
+    await Future.wait([done, clearing]);
+    expect(seen, [isNull, isEmpty]);
+    expect(disk.keys, isEmpty);
+    await disk.close();
+  });
+
   test('a markUsed queued behind close leaves the file alone', () async {
     final disk = await build();
     await disk.write('a', 1);

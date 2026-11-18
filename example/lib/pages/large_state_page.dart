@@ -63,8 +63,12 @@ class _LargeStatePageState extends State<LargeStatePage> {
     final first = _nextId();
     for (var id = first; id < first + _kNotesPerTap; id++) {
       final store = LargeNoteStore('$id', _box)..write(_kLinesPerNote);
-      await store.flush();
-      store.dispose();
+      try {
+        await store.flush();
+      } finally {
+        // A live store's note would be skipped by the move to files.
+        store.dispose();
+      }
     }
     return 'Wrote $_kNotesPerTap notes to the "$kLargeNotesBox" box, '
         'each kept as gzipped JSON.';

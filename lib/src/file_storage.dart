@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:hydrated_mobx/src/eviction.dart';
 import 'package:hydrated_mobx/src/hydrated_encoding.dart';
 import 'package:hydrated_mobx/src/hydrated_mobx.dart';
 import 'package:hydrated_mobx/src/hydrated_storage.dart';
+import 'package:hydrated_mobx/src/pending_deletes.dart';
 import 'package:meta/meta.dart';
 import 'package:synchronized/synchronized.dart';
 
@@ -16,9 +18,10 @@ import 'package:synchronized/synchronized.dart';
 /// note) that should cost no RAM while its store does not exist.
 ///
 /// A `HydratedStorage` box holds every value in memory for as long as it is
-/// open, so its memory grows with what is on disk. Here, opening reads only
-/// the directory listing, and memory holds the values that were read or
-/// written lately, up to `cacheBytes`.
+/// open, so its memory grows with what is on disk. Here, opening lists the
+/// directory and reads no file (evicting at build, with `maxAge` or
+/// `maxEntries`, also reads their modification times), and memory holds the
+/// values that were read or written lately, up to `cacheBytes`.
 ///
 /// [read] stays synchronous, as stores need: a value that is not cached is
 /// read from its file right there, which blocks for as long as the read
@@ -27,7 +30,7 @@ import 'package:synchronized/synchronized.dart';
 ///
 /// ```dart
 /// final notes = await FileStorage.build(
-///   storageDirectory: HydratedStorageDirectory('$support/notes'),
+///   storageDirectory: HydratedStorageDirectory('${support.path}/notes'),
 /// );
 ///
 /// await notes.preload('note_$id');
@@ -101,7 +104,8 @@ class FileStorage implements UseTimeStorage {
   ///
   /// Opening lists the directory and reads no file. With [maxAge] or
   /// [maxEntries] it also evicts, which reads the modification time of every
-  /// file [evictable] accepts: one `stat` per file, at each launch.
+  /// file [evictable] accepts: one `stat` per file, at each launch, run in
+  /// a background isolate.
   ///
   /// Throws a [StateError] when another storage, in this isolate or another
   /// process, has the directory open. Another isolate of this process is not
@@ -221,9 +225,9 @@ class FileStorage implements UseTimeStorage {
   final RandomAccessFile _lockFile;
   bool _closed = false;
 
-  /// Keys a queued [deleteAll] or [clear] will remove, with how many queued
-  /// deletes name each; see [_hideWhile].
-  final _deleting = <String, int>{};
+  /// Keys a queued [deleteAll] or [clear] will remove, which [read] and
+  /// [keys] treat as gone already.
+  final _pending = PendingDeletes();
 
   static String _nameOf(String key) {
     final bytes = utf8.encode(key);
@@ -334,7 +338,7 @@ class FileStorage implements UseTimeStorage {
   @override
   dynamic read(String key) {
     _checkOpen('read');
-    if (!_keys.contains(key) || _deleting.containsKey(key)) return null;
+    if (!_keys.contains(key) || _pending.hides(key)) return null;
     var bytes = _cache.remove(key);
     if (bytes != null) {
       _cache[key] = bytes; // Most recently used now.
@@ -355,7 +359,7 @@ class FileStorage implements UseTimeStorage {
     _checkOpen('list keys');
     return [
       for (final key in _keys)
-        if (!_deleting.containsKey(key)) key,
+        if (!_pending.hides(key)) key,
     ];
   }
 
@@ -397,31 +401,12 @@ class FileStorage implements UseTimeStorage {
 
   @override
   Future<void> deleteAll(Iterable<String> keys) {
+    _checkOpen('delete');
     final list = keys.toList();
-    return _hideWhile(
-      'delete',
+    return _pending.delete(
       list,
-      () => _deleteFiles(list.where(_keys.contains)),
+      () => _locked('delete', () => _deleteFiles(list.where(_keys.contains))),
     );
-  }
-
-  /// Runs [delete] under [_lock] with [keys] hidden from [read] and [keys]
-  /// from now until it finishes, so a store built while the delete waits
-  /// does not hydrate a value that is about to disappear.
-  Future<void> _hideWhile(
-    String operation,
-    List<String> keys,
-    Future<void> Function() delete,
-  ) {
-    _checkOpen(operation);
-    for (final key in keys) {
-      _deleting.update(key, (n) => n + 1, ifAbsent: () => 1);
-    }
-    return _locked(operation, delete).whenComplete(() {
-      for (final key in keys) {
-        if (_deleting.update(key, (n) => n - 1) == 0) _deleting.remove(key);
-      }
-    });
   }
 
   /// Deletes the files of [keys], state keys first: a crash midway then
@@ -452,12 +437,8 @@ class FileStorage implements UseTimeStorage {
     // Suspend the live stores now: a write they queued behind the lock
     // would otherwise land after the wipe.
     HydratedMobX.suspendAll(storage: this);
-    // Keys written after this call land after the wipe, so only the ones
-    // stored now are hidden.
-    return _hideWhile(
-      'clear',
-      _keys.toList(),
-      () => _deleteFiles(_keys.toList()),
+    return _pending.clear(
+      () => _locked('clear', () => _deleteFiles(_keys.toList())),
     );
   }
 
@@ -484,7 +465,7 @@ class FileStorage implements UseTimeStorage {
     _checkOpen('read use times');
     if (HydratedMobX.isVersionKey(key) ||
         !_keys.contains(key) ||
-        _deleting.containsKey(key)) {
+        _pending.hides(key)) {
       return null;
     }
     return DateTime.fromMillisecondsSinceEpoch(_usedAtOf(key));
@@ -540,22 +521,55 @@ class FileStorage implements UseTimeStorage {
   }) async {
     checkEvictArguments(olderThan: olderThan, maxEntries: maxEntries);
     // Under the lock, so use times queued by [markUsed] land first.
-    final doomed = await _locked(
-      'evict',
-      () async => evictionsAmong(
-        _keys.toList(),
+    final doomed = await _locked('evict', () async {
+      final accepted = [
+        for (final key in _keys.toList())
+          if (!HydratedMobX.isVersionKey(key) && (where?.call(key) ?? true))
+            key,
+      ];
+      await _loadUseTimes(accepted);
+      return evictionsAmong(
+        accepted,
         usedAt: _usedAtOf,
         now: _clock().millisecondsSinceEpoch,
         olderThan: olderThan,
         maxEntries: maxEntries,
-        where: where,
         live: keepLive ? () => HydratedMobX.liveTokens(storage: this) : null,
-      ),
-    );
+      );
+    });
     if (doomed.isEmpty) return doomed;
     await HydratedMobX.clearAll(storage: this, where: doomed.contains);
     return doomed;
   }
+
+  /// Reads the modification times of the files of [keys] not known yet in
+  /// one background isolate, so that evicting a large directory at build
+  /// does not block this isolate for a stat per file.
+  Future<void> _loadUseTimes(List<String> keys) async {
+    final unknown = [
+      for (final key in keys)
+        if (!_usedAt.containsKey(key)) key,
+    ];
+    if (unknown.isEmpty) return;
+    final paths = [for (final key in unknown) _fileOf(key).path];
+    final times = await Isolate.run(() => _modifiedTimes(paths));
+    for (final (i, key) in unknown.indexed) {
+      if (times[i] case final time?) _usedAt[key] = time;
+    }
+  }
+
+  /// The modification time (ms since epoch) of each file in [paths], `null`
+  /// for one that cannot be read.
+  static List<int?> _modifiedTimes(List<String> paths) => [
+        for (final path in paths)
+          () {
+            try {
+              return File(path).lastModifiedSync().millisecondsSinceEpoch;
+            } on FileSystemException {
+              return null;
+            }
+          }(),
+      ];
 
   int _usedAtOf(String key) {
     final known = _usedAt[key];
