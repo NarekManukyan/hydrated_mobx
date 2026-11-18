@@ -818,6 +818,33 @@ void main() {
       await disk.close();
     });
 
+    test('usedAt and setUsedAt, and moveTokens keeps use times', () async {
+      final disk = await build();
+      await disk.write('old_1', {'count': 1});
+      expect(disk.usedAt('old_1'), now);
+      await disk.setUsedAt('old_1', DateTime(2025));
+      await disk.setUsedAt('absent', DateTime(2025));
+      expect(disk.usedAt('old_1'), DateTime(2025));
+      expect(disk.usedAt('absent'), isNull);
+
+      now = now.add(const Duration(days: 1));
+      await HydratedMobX.moveTokens(
+        (token, _) => token.replaceFirst('old_', 'new_'),
+        storage: disk,
+      );
+      expect(disk.usedAt('new_1'), DateTime(2025));
+
+      await disk.setUsedAt('new_1', DateTime(2030));
+      expect(disk.usedAt('new_1'), now);
+      await disk.close();
+
+      final untracked = await build(trackUse: false);
+      await untracked.write('k', 1);
+      await untracked.setUsedAt('k', DateTime(2025));
+      expect(untracked.usedAt('k'), isNull);
+      await untracked.close();
+    });
+
     test('an initialUseTime in the future counts as now', () async {
       final hive = Hive..init(dir.path);
       final legacy = await hive.openBox<dynamic>('future');

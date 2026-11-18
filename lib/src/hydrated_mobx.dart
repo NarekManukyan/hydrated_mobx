@@ -207,31 +207,71 @@ abstract class HydratedMobX with Store {
     final moved = <String, String>{};
     for (final MapEntry(key: from, value: next) in planned.entries) {
       if (clashing.contains(next)) continue;
-      final value = valueOf(from);
-      final fromVersion = versionKeyOf(from);
-      if (existing.contains(next)) {
-        if (!_jsonEquals(target.read(next), value) ||
-            target.read(versionKeyOf(next)) != target.read(fromVersion)) {
-          continue;
-        }
-      } else {
-        final version = target.read(fromVersion);
-        if (version != null) {
-          await target.write(versionKeyOf(next), version);
-        } else {
-          // An absent key reads as version 1; drop one left behind.
-          await target.delete(versionKeyOf(next));
-        }
-        await target.write(next, value);
-      }
-      await target.deleteAll([from, fromVersion]);
-      moved[from] = next;
+      final done = await _moveOne(
+        source: target,
+        from: from,
+        value: valueOf(from),
+        target: target,
+        to: next,
+        exists: existing.contains(next),
+      );
+      if (done) moved[from] = next;
     }
     return moved;
   }
 
+  /// Moves the state [value] of token [from] in [source] to token [to] in
+  /// [target], with its version key and use time, and returns whether it
+  /// did. [exists] says whether [target] holds [to] already; then only the
+  /// same state under the same version counts as moved, and is deleted from
+  /// [source].
+  ///
+  /// Writes the version, then the state, then deletes [from], so a crash
+  /// leaves the state in one place or both, and running again finishes. A
+  /// failed write takes back what it wrote to [to] before rethrowing.
+  static Future<bool> _moveOne({
+    required Storage source,
+    required String from,
+    required Object? value,
+    required Storage target,
+    required String to,
+    required bool exists,
+  }) async {
+    final fromVersion = versionKeyOf(from);
+    final toVersion = versionKeyOf(to);
+    final version = source.read(fromVersion);
+    if (exists) {
+      if (!_jsonEquals(target.read(to), value) ||
+          target.read(toVersion) != version) {
+        return false;
+      }
+    } else {
+      try {
+        if (version != null) {
+          await target.write(toVersion, version);
+        } else {
+          // An absent key reads as version 1; drop one left behind.
+          await target.delete(toVersion);
+        }
+        await target.write(to, value);
+      } catch (_) {
+        // A version key on its own would date state written there later.
+        await target.deleteAll([to, toVersion]).catchError((Object _) {});
+        rethrow;
+      }
+      if (source is UseTimeStorage && target is UseTimeStorage) {
+        if (source.usedAt(from) case final usedAt?) {
+          await target.setUsedAt(to, usedAt);
+        }
+      }
+    }
+    await source.deleteAll([from, fromVersion]);
+    return true;
+  }
+
   /// Moves the state of every token that passes [where] from storage [from]
-  /// into [to], with its version key, e.g. per-document state from a Hive
+  /// into [to], with its version key and, between storages that keep them
+  /// ([UseTimeStorage]), its use time, e.g. per-document state from a Hive
   /// box into a `FileStorage`. Returns the tokens moved.
   ///
   /// Each token is written to [to] (version, then state) before it is
@@ -241,38 +281,56 @@ abstract class HydratedMobX with Store {
   /// state is only deleted from [from]. Tokens of live stores bound to
   /// either storage are skipped. Call it at startup, before constructing the
   /// stores.
+  ///
+  /// A token that fails to move stays in [from], and the others still move.
+  /// Each failure goes to [onError]; without it, the first one is rethrown
+  /// once every token has been tried.
+  ///
+  /// Throws an [ArgumentError] when [from] and [to] are the same storage,
+  /// also when one wraps the other ([ForwardingStorage]): the move would
+  /// delete every token it wrote.
   static Future<Set<String>> transferTokens({
     required Storage from,
     required Storage to,
     required bool Function(String token) where,
+    void Function(String token, Object error, StackTrace stackTrace)? onError,
   }) async {
+    Storage unwrapped(Storage storage) => switch (storage) {
+          final ForwardingStorage wrapper => unwrapped(wrapper.inner),
+          _ => storage,
+        };
+    if (identical(unwrapped(from), unwrapped(to))) {
+      throw ArgumentError.value(to, 'to', 'is the same storage as from');
+    }
     final live = {...liveTokens(storage: from), ...liveTokens(storage: to)};
     final targetKeys = to.keys.toSet();
     final moved = <String>{};
+    (Object, StackTrace)? failed;
     final tokens = [
       for (final key in from.keys)
         if (!isVersionKey(key) && !live.contains(key) && where(key)) key,
     ];
     for (final token in tokens) {
-      final value = from.read(token);
-      final versionKey = versionKeyOf(token);
-      final version = from.read(versionKey);
-      if (targetKeys.contains(token)) {
-        if (!_jsonEquals(to.read(token), value) ||
-            to.read(versionKey) != version) {
-          continue;
-        }
-      } else {
-        if (version != null) {
-          await to.write(versionKey, version);
+      try {
+        final done = await _moveOne(
+          source: from,
+          from: token,
+          value: from.read(token),
+          target: to,
+          to: token,
+          exists: targetKeys.contains(token),
+        );
+        if (done) moved.add(token);
+      } catch (error, stackTrace) {
+        if (onError != null) {
+          onError(token, error, stackTrace);
         } else {
-          // An absent key reads as version 1; drop one left behind.
-          await to.delete(versionKey);
+          failed ??= (error, stackTrace);
         }
-        await to.write(token, value);
       }
-      await from.deleteAll([token, versionKey]);
-      moved.add(token);
+    }
+    if (failed case (final error, final stackTrace)) {
+      Error.throwWithStackTrace(error, stackTrace);
     }
     return moved;
   }

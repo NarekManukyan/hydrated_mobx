@@ -10,6 +10,7 @@ import 'package:hive_ce/hive.dart';
 // single major (`hive_ce: ^2`) to bound exposure to internal changes.
 // ignore: implementation_imports
 import 'package:hive_ce/src/hive_impl.dart';
+import 'package:hydrated_mobx/src/eviction.dart';
 import 'package:hydrated_mobx/src/gzip/gzip.dart';
 import 'package:hydrated_mobx/src/hydrated_cipher.dart';
 import 'package:hydrated_mobx/src/hydrated_encoding.dart';
@@ -57,6 +58,18 @@ abstract class UseTrackingStorage implements Storage {
   void markUsed(String key);
 }
 
+/// A [UseTrackingStorage] whose use times can be read and set, so
+/// [HydratedMobX.moveTokens] and [HydratedMobX.transferTokens] keep a key's
+/// use time when they move its state.
+abstract class UseTimeStorage implements UseTrackingStorage {
+  /// When [key] was last used, or `null` when no use time is known.
+  DateTime? usedAt(String key);
+
+  /// Records that [key] was last used at [time]. Does nothing when [key] is
+  /// not stored or the storage does not record use times.
+  Future<void> setUsedAt(String key, DateTime time);
+}
+
 /// {@template forwarding_storage}
 /// A [Storage] that forwards every call to [inner]; extend it to wrap a
 /// storage (to count, log or delay writes) and override what you need.
@@ -64,7 +77,7 @@ abstract class UseTrackingStorage implements Storage {
 /// Stores bind to the wrapper, not to [inner], so [clear] suspends the
 /// wrapper's stores before clearing [inner].
 /// {@endtemplate}
-class ForwardingStorage implements UseTrackingStorage {
+class ForwardingStorage implements UseTimeStorage {
   /// {@macro forwarding_storage}
   ForwardingStorage(this.inner);
 
@@ -90,6 +103,18 @@ class ForwardingStorage implements UseTrackingStorage {
   void markUsed(String key) {
     final target = inner;
     if (target is UseTrackingStorage) target.markUsed(key);
+  }
+
+  @override
+  DateTime? usedAt(String key) {
+    final target = inner;
+    return target is UseTimeStorage ? target.usedAt(key) : null;
+  }
+
+  @override
+  Future<void> setUsedAt(String key, DateTime time) async {
+    final target = inner;
+    if (target is UseTimeStorage) await target.setUsedAt(key, time);
   }
 
   @override
@@ -152,7 +177,7 @@ class HydratedStorageDirectory {
 /// stores that belong there via `HydratedMobX(storage: ...)`; clearing one
 /// namespace then never touches the other.
 /// {@endtemplate}
-class HydratedStorage implements UseTrackingStorage {
+class HydratedStorage implements UseTimeStorage {
   /// Wraps an already-open [box] without eviction metadata.
   @visibleForTesting
   HydratedStorage(Box<dynamic> box) : this._(box, null, clock: DateTime.now);
@@ -420,12 +445,7 @@ class HydratedStorage implements UseTrackingStorage {
     bool Function(String key)? where,
     bool keepLive = false,
   }) async {
-    if (maxEntries != null && maxEntries < 0) {
-      throw ArgumentError.value(maxEntries, 'maxEntries', 'must be >= 0');
-    }
-    if (olderThan != null && olderThan.isNegative) {
-      throw ArgumentError.value(olderThan, 'olderThan', 'must not be negative');
-    }
+    checkEvictArguments(olderThan: olderThan, maxEntries: maxEntries);
     final meta = _meta;
     if (meta == null) {
       _checkOpen('evict');
@@ -435,29 +455,15 @@ class HydratedStorage implements UseTrackingStorage {
     // just now could be judged by its previous use time.
     await _locked('evict', () async {});
     final now = _clock().millisecondsSinceEpoch;
-    final live = keepLive ? HydratedMobX.liveTokens(storage: this) : null;
-    final candidates = [
-      for (final key in keys)
-        if (!HydratedMobX.isVersionKey(key) &&
-            !(live?.contains(key) ?? false) &&
-            (where?.call(key) ?? true))
-          (key: key, usedAt: _usedAt(meta, key) ?? now),
-    ];
-    final doomed = <String>{};
-    if (olderThan != null) {
-      final cutoff = now - olderThan.inMilliseconds;
-      doomed.addAll([
-        for (final c in candidates)
-          if (c.usedAt < cutoff) c.key,
-      ]);
-    }
-    if (maxEntries != null) {
-      final kept = [
-        for (final c in candidates)
-          if (!doomed.contains(c.key)) c,
-      ]..sort((a, b) => b.usedAt.compareTo(a.usedAt));
-      doomed.addAll(kept.skip(maxEntries).map((c) => c.key));
-    }
+    final doomed = evictionsAmong(
+      keys,
+      usedAt: (key) => _usedAt(meta, key) ?? now,
+      now: now,
+      olderThan: olderThan,
+      maxEntries: maxEntries,
+      where: where,
+      live: keepLive ? HydratedMobX.liveTokens(storage: this) : null,
+    );
     if (doomed.isEmpty) return doomed;
     // The shared path: suspends live stores of doomed keys and deletes their
     // version keys too.
@@ -531,6 +537,31 @@ class HydratedStorage implements UseTrackingStorage {
     if (meta == null || !meta.isOpen || !_dueStamp(meta, key)) return;
     await meta.put(key, _clock().millisecondsSinceEpoch);
   }
+
+  /// When [key] was last used, as recorded at most every `useResolution`;
+  /// `null` when this storage does not track use or [key] has no use time.
+  @override
+  DateTime? usedAt(String key) {
+    _checkOpen('read use times');
+    final meta = _meta;
+    final used = meta == null ? null : _usedAt(meta, key);
+    return used == null ? null : DateTime.fromMillisecondsSinceEpoch(used);
+  }
+
+  /// Records [time], or now if it is later, as [key]'s use time, when this
+  /// storage tracks use and holds [key].
+  @override
+  Future<void> setUsedAt(String key, DateTime time) =>
+      _locked('set use times', () async {
+        final meta = _meta;
+        if (meta == null ||
+            HydratedMobX.isVersionKey(key) ||
+            !_box.containsKey(key)) {
+          return;
+        }
+        final now = _clock().millisecondsSinceEpoch;
+        await meta.put(key, min(time.millisecondsSinceEpoch, now));
+      });
 
   @override
   void markUsed(String key) {

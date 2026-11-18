@@ -110,7 +110,7 @@ Future<void> main() async {
   final files = Platform.environment['STORAGE'] == 'file';
   Future<Storage> open() => files
       ? FileStorage.build(
-          directory: dir.path,
+          storageDirectory: directory,
           encoding: encoding,
           cacheBytes: 0,
         )

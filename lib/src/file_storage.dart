@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:hydrated_mobx/src/eviction.dart';
 import 'package:hydrated_mobx/src/hydrated_encoding.dart';
 import 'package:hydrated_mobx/src/hydrated_mobx.dart';
 import 'package:hydrated_mobx/src/hydrated_storage.dart';
@@ -25,7 +27,9 @@ import 'package:synchronized/synchronized.dart';
 /// navigating to the screen that creates the store:
 ///
 /// ```dart
-/// final notes = await FileStorage.build(directory: '$support/notes');
+/// final notes = await FileStorage.build(
+///   storageDirectory: HydratedStorageDirectory('$support/notes'),
+/// );
 ///
 /// await notes.preload('note_$id');
 /// final store = NoteStore(id, storage: notes); // hydrates from the cache
@@ -33,19 +37,24 @@ import 'package:synchronized/synchronized.dart';
 ///
 /// A write goes to a temporary file that is then renamed over the old one,
 /// so a crash leaves the old value or the new one, never a torn file.
-/// Values are JSON (or bytes), as [HydratedEncoding.json] or
-/// [HydratedEncoding.gzipJson]. Only one instance may use a directory at a
-/// time. Not available on the web.
+/// [deleteAll] and [clear] delete one file at a time, state keys before
+/// their version keys, so a crash midway leaves some keys behind but never
+/// state without its version key. Values are JSON (or bytes), as
+/// [HydratedEncoding.json] or [HydratedEncoding.gzipJson], and are not
+/// encrypted. One storage at a time may use a directory, in this process or
+/// any other. Not available on the web.
 /// {@endtemplate}
-class FileStorage implements UseTrackingStorage {
+class FileStorage implements UseTimeStorage {
   FileStorage._(
     this._directory,
-    this._keys, {
+    this._keys,
+    this._lock,
+    this._lockFile, {
     required HydratedEncoding encoding,
     required int cacheBytes,
     required Duration useResolution,
     required DateTime Function() clock,
-  })  : _encoding = encoding,
+  })  : _codec = HydratedValueCodec.file(encoding),
         _cacheLimit = cacheBytes,
         _useResolution = useResolution,
         _clock = clock;
@@ -59,10 +68,21 @@ class FileStorage implements UseTrackingStorage {
   /// Extension of a value being written, before it is renamed into place.
   static const _tempExtension = '.tmp';
 
+  /// The file held locked while a storage uses its directory.
+  static const _lockName = '.lock';
+
   /// The longest file name most file systems accept is 255 bytes.
   static const _maxNameLength = 255;
 
-  /// Opens the storage kept in [directory], creating it if needed.
+  /// Lowercase base32 (RFC 4648), so names stay distinct on file systems
+  /// that ignore case, as macOS and Windows do by default.
+  static const _alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
+
+  /// Directories this process has open. A file lock is held per process, so
+  /// it cannot tell two storages of one process apart.
+  static final _openDirectories = <String>{};
+
+  /// Opens the storage kept in [storageDirectory], creating it if needed.
   ///
   /// - [encoding] is how values are written: [HydratedEncoding.gzipJson]
   ///   (the default, smallest) or [HydratedEncoding.json]. Files written
@@ -73,8 +93,11 @@ class FileStorage implements UseTrackingStorage {
   ///   `HydratedStorage.build`, when the storage opens: see [evict].
   /// - [useResolution]: how often [markUsed] rewrites a file's use time at
   ///   most.
+  ///
+  /// Throws a [StateError] when another storage, in this process or another
+  /// one, has the directory open.
   static Future<FileStorage> build({
-    required String directory,
+    required HydratedStorageDirectory storageDirectory,
     HydratedEncoding encoding = HydratedEncoding.gzipJson,
     int cacheBytes = defaultCacheBytes,
     Duration? maxAge,
@@ -83,6 +106,13 @@ class FileStorage implements UseTrackingStorage {
     Duration useResolution = HydratedStorage.defaultUseResolution,
     @visibleForTesting DateTime Function() clock = DateTime.now,
   }) async {
+    if (storageDirectory == HydratedStorageDirectory.web) {
+      throw ArgumentError.value(
+        storageDirectory,
+        'storageDirectory',
+        'must be a directory; FileStorage is not available on the web',
+      );
+    }
     if (encoding == HydratedEncoding.tree) {
       throw ArgumentError.value(
         encoding,
@@ -93,42 +123,70 @@ class FileStorage implements UseTrackingStorage {
     if (cacheBytes < 0) {
       throw ArgumentError.value(cacheBytes, 'cacheBytes', 'must be >= 0');
     }
-    if (maxAge != null && maxAge.isNegative) {
-      throw ArgumentError.value(maxAge, 'maxAge', 'must not be negative');
-    }
-    final dir = Directory(directory);
+    checkEvictArguments(olderThan: maxAge, maxEntries: maxEntries);
+    final dir = Directory(storageDirectory.path);
     await dir.create(recursive: true);
-    final keys = <String>{};
-    await for (final entry in dir.list()) {
-      if (entry is! File) continue;
-      final name = entry.uri.pathSegments.last;
-      if (name.endsWith(_tempExtension)) {
-        // A write the process did not finish; the old value is intact.
-        await entry.delete();
-      } else if (_keyOf(name) case final key?) {
-        keys.add(key);
-      }
+    final path = await dir.resolveSymbolicLinks();
+    if (!_openDirectories.add(path)) {
+      throw StateError('A FileStorage already has $path open');
     }
+    final RandomAccessFile lockFile;
+    try {
+      lockFile = await _lockDirectory(path);
+    } catch (_) {
+      _openDirectories.remove(path);
+      rethrow;
+    }
+    final keys = <String>{};
     final storage = FileStorage._(
-      dir,
+      Directory(path),
       keys,
+      Lock(),
+      lockFile,
       encoding: encoding,
       cacheBytes: cacheBytes,
       useResolution: useResolution,
       clock: clock,
     );
-    if (maxAge != null || maxEntries != null) {
-      await storage.evict(
-        olderThan: maxAge,
-        maxEntries: maxEntries,
-        where: evictable,
-      );
+    try {
+      await for (final entry in storage._directory.list()) {
+        if (entry is! File) continue;
+        final name = entry.uri.pathSegments.last;
+        if (name.endsWith(_tempExtension)) {
+          // A write the process did not finish; the old value is intact.
+          await entry.delete();
+        } else if (_keyOf(name) case final key?) {
+          keys.add(key);
+        }
+      }
+      if (maxAge != null || maxEntries != null) {
+        await storage.evict(
+          olderThan: maxAge,
+          maxEntries: maxEntries,
+          where: evictable,
+        );
+      }
+    } catch (_) {
+      await storage.close();
+      rethrow;
     }
     return storage;
   }
 
+  static Future<RandomAccessFile> _lockDirectory(String path) async {
+    final file = await File('$path${Platform.pathSeparator}$_lockName')
+        .open(mode: FileMode.write);
+    try {
+      // Exclusive and non-blocking: fails at once if another process holds it.
+      return await file.lock();
+    } on FileSystemException {
+      await file.close();
+      throw StateError('Another process has the FileStorage at $path open');
+    }
+  }
+
   final Directory _directory;
-  final HydratedEncoding _encoding;
+  final HydratedValueCodec _codec;
   final int _cacheLimit;
   final Duration _useResolution;
   final DateTime Function() _clock;
@@ -143,25 +201,66 @@ class FileStorage implements UseTrackingStorage {
   /// Use times (ms since epoch) known without asking the file system.
   final _usedAt = <String, int>{};
 
-  final _lock = Lock();
+  final Lock _lock;
+  final RandomAccessFile _lockFile;
   bool _closed = false;
 
   static String _nameOf(String key) {
-    final name =
-        '${base64Url.encode(utf8.encode(key)).replaceAll('=', '')}$_extension';
-    if (name.length > _maxNameLength) {
+    final bytes = utf8.encode(key);
+    // A state key's version key, written beside it, has the longer name,
+    // and a write adds the temporary extension to either.
+    final longest = HydratedMobX.isVersionKey(key)
+        ? bytes.length
+        : bytes.length + HydratedMobX.versionKeySuffix.length;
+    if (_base32Length(longest) + _extension.length + _tempExtension.length >
+        _maxNameLength) {
       throw ArgumentError.value(key, 'key', 'is too long for a file name');
     }
-    return name;
+    return '${_base32(bytes)}$_extension';
+  }
+
+  static int _base32Length(int bytes) => (bytes * 8 + 4) ~/ 5;
+
+  static String _base32(List<int> bytes) {
+    final out = StringBuffer();
+    var buffer = 0;
+    var bits = 0;
+    for (final byte in bytes) {
+      buffer = (buffer << 8) | byte;
+      bits += 8;
+      while (bits >= 5) {
+        bits -= 5;
+        out.write(_alphabet[(buffer >> bits) & 31]);
+      }
+      buffer &= (1 << bits) - 1;
+    }
+    if (bits > 0) out.write(_alphabet[(buffer << (5 - bits)) & 31]);
+    return out.toString();
   }
 
   static String? _keyOf(String name) {
     if (!name.endsWith(_extension)) return null;
-    final encoded = name.substring(0, name.length - _extension.length);
+    final bytes = <int>[];
+    var buffer = 0;
+    var bits = 0;
+    for (final char
+        in name.substring(0, name.length - _extension.length).split('')) {
+      final value = _alphabet.indexOf(char);
+      if (value < 0) return null; // Not a file this storage wrote.
+      buffer = (buffer << 5) | value;
+      bits += 5;
+      if (bits >= 8) {
+        bits -= 8;
+        bytes.add((buffer >> bits) & 0xff);
+      }
+      buffer &= (1 << bits) - 1;
+    }
+    // Padding bits a name of this storage never sets.
+    if (bits >= 5 || buffer != 0) return null;
     try {
-      return utf8.decode(base64Url.decode(base64Url.normalize(encoded)));
+      return utf8.decode(bytes);
     } on FormatException {
-      return null; // Not a file this storage wrote.
+      return null;
     }
   }
 
@@ -228,7 +327,7 @@ class FileStorage implements UseTrackingStorage {
       }
       _cachePut(key, bytes);
     }
-    return _FileCodec.decode(bytes);
+    return _codec.decode(bytes);
   }
 
   @override
@@ -240,7 +339,7 @@ class FileStorage implements UseTrackingStorage {
   @override
   Future<void> write(String key, dynamic value) => Future.sync(() {
         _checkOpen('write');
-        final bytes = _FileCodec.encode(value, _encoding);
+        final bytes = _codec.encode(value)! as Uint8List;
         return _locked('write', () async {
           final file = _fileOf(key);
           final temp = File('${file.path}$_tempExtension');
@@ -264,18 +363,32 @@ class FileStorage implements UseTrackingStorage {
   @override
   Future<void> deleteAll(Iterable<String> keys) {
     final list = keys.toList();
-    return _locked('delete', () async {
-      for (final key in list) {
-        if (!_keys.remove(key)) continue;
-        _cacheRemove(key);
-        _usedAt.remove(key);
-        try {
-          await _fileOf(key).delete();
-        } on PathNotFoundException {
-          // Already gone.
-        }
-      }
+    return _locked('delete', () {
+      final stored = [
+        for (final key in list)
+          if (_keys.remove(key)) key,
+      ];
+      return _deleteFiles(stored);
     });
+  }
+
+  /// Deletes the files of [keys], which are already out of [_keys], state
+  /// keys first: a crash midway then never leaves state without its
+  /// version key, which would make it read as version 1.
+  Future<void> _deleteFiles(List<String> keys) async {
+    final ordered = [
+      ...keys.where((key) => !HydratedMobX.isVersionKey(key)),
+      ...keys.where(HydratedMobX.isVersionKey),
+    ];
+    for (final key in ordered) {
+      _cacheRemove(key);
+      _usedAt.remove(key);
+      try {
+        await _fileOf(key).delete();
+      } on PathNotFoundException {
+        // Already gone.
+      }
+    }
   }
 
   @override
@@ -284,31 +397,45 @@ class FileStorage implements UseTrackingStorage {
     // Suspend the live stores now: a write they queued behind the lock
     // would otherwise land after the wipe.
     HydratedMobX.suspendAll(storage: this);
-    return _locked('clear', () async {
+    return _locked('clear', () {
       final keys = _keys.toList();
       _keys.clear();
-      _cache.clear();
-      _cachedBytes = 0;
-      _usedAt.clear();
-      for (final key in keys) {
-        try {
-          await _fileOf(key).delete();
-        } on PathNotFoundException {
-          // Already gone.
-        }
-      }
+      return _deleteFiles(keys);
     });
   }
 
   @override
   Future<void> close() async {
     if (_closed) return;
-    await _lock.synchronized(() {
+    await _lock.synchronized(() async {
+      if (_closed) return;
       _closed = true;
       _cache.clear();
       _cachedBytes = 0;
+      _openDirectories.remove(_directory.path);
+      await _lockFile.close(); // Closing releases the lock.
     });
   }
+
+  @override
+  DateTime? usedAt(String key) {
+    _checkOpen('read use times');
+    if (HydratedMobX.isVersionKey(key) || !_keys.contains(key)) return null;
+    return DateTime.fromMillisecondsSinceEpoch(_usedAtOf(key));
+  }
+
+  /// Records [time], or now if it is later, as [key]'s use time, when this
+  /// storage holds [key].
+  @override
+  Future<void> setUsedAt(String key, DateTime time) =>
+      _locked('set use times', () async {
+        if (HydratedMobX.isVersionKey(key) || !_keys.contains(key)) return;
+        final now = _clock().millisecondsSinceEpoch;
+        final at = min(time.millisecondsSinceEpoch, now);
+        await _fileOf(key)
+            .setLastModified(DateTime.fromMillisecondsSinceEpoch(at));
+        _usedAt[key] = at;
+      });
 
   @override
   void markUsed(String key) {
@@ -327,9 +454,9 @@ class FileStorage implements UseTrackingStorage {
     );
   }
 
-  /// Deletes stale state, with its version key, and returns the state keys
-  /// it deleted. A key's use time is when its store last hydrated from it or
-  /// wrote it (kept as the file's modification time).
+  /// Deletes stale state, with its version key, and returns a new set of
+  /// the state keys it deleted. A key's use time is when its store last
+  /// hydrated from it or wrote it (kept as the file's modification time).
   ///
   /// - [olderThan] drops every key not used for that long.
   /// - [maxEntries] then keeps only that many keys, the most recently used.
@@ -344,44 +471,26 @@ class FileStorage implements UseTrackingStorage {
     bool Function(String key)? where,
     bool keepLive = false,
   }) async {
-    if (maxEntries != null && maxEntries < 0) {
-      throw ArgumentError.value(maxEntries, 'maxEntries', 'must be >= 0');
-    }
-    if (olderThan != null && olderThan.isNegative) {
-      throw ArgumentError.value(olderThan, 'olderThan', 'must not be negative');
-    }
-    final candidates = await _locked('evict', () async {
-      final live = keepLive ? HydratedMobX.liveTokens(storage: this) : null;
-      return [
-        for (final key in _keys.toList())
-          if (!HydratedMobX.isVersionKey(key) &&
-              !(live?.contains(key) ?? false) &&
-              (where?.call(key) ?? true))
-            (key: key, usedAt: await _usedAtOf(key)),
-      ];
-    });
-    final now = _clock().millisecondsSinceEpoch;
-    final doomed = <String>{};
-    if (olderThan != null) {
-      final cutoff = now - olderThan.inMilliseconds;
-      doomed.addAll([
-        for (final c in candidates)
-          if (c.usedAt < cutoff) c.key,
-      ]);
-    }
-    if (maxEntries != null) {
-      final kept = [
-        for (final c in candidates)
-          if (!doomed.contains(c.key)) c,
-      ]..sort((a, b) => b.usedAt.compareTo(a.usedAt));
-      doomed.addAll(kept.skip(maxEntries).map((c) => c.key));
-    }
-    if (doomed.isEmpty) return const {};
+    checkEvictArguments(olderThan: olderThan, maxEntries: maxEntries);
+    // Under the lock, so use times queued by [markUsed] land first.
+    final doomed = await _locked(
+      'evict',
+      () async => evictionsAmong(
+        _keys.toList(),
+        usedAt: _usedAtOf,
+        now: _clock().millisecondsSinceEpoch,
+        olderThan: olderThan,
+        maxEntries: maxEntries,
+        where: where,
+        live: keepLive ? HydratedMobX.liveTokens(storage: this) : null,
+      ),
+    );
+    if (doomed.isEmpty) return doomed;
     await HydratedMobX.clearAll(storage: this, where: doomed.contains);
     return doomed;
   }
 
-  Future<int> _usedAtOf(String key) async {
+  int _usedAtOf(String key) {
     final known = _usedAt[key];
     if (known != null) return known;
     try {
@@ -390,49 +499,5 @@ class FileStorage implements UseTrackingStorage {
     } on FileSystemException {
       return _clock().millisecondsSinceEpoch;
     }
-  }
-}
-
-/// The bytes of a value file: a 4-byte header, then the value.
-abstract final class _FileCodec {
-  static const _magic = [0x89, 0x48, 0x46]; // 0x89 'H' 'F'
-  static const _bytesFormat = 0;
-  static const _jsonFormat = 1;
-  static const _gzipFormat = 2;
-  static const _headerLength = 4;
-
-  static Uint8List encode(Object? value, HydratedEncoding encoding) {
-    final int format;
-    final List<int> body;
-    if (value is Uint8List) {
-      format = _bytesFormat;
-      body = value;
-    } else {
-      // Throws for values JSON cannot hold, failing the write.
-      final text = utf8.encode(jsonEncode(value));
-      final gzipped = encoding == HydratedEncoding.gzipJson;
-      format = gzipped ? _gzipFormat : _jsonFormat;
-      body = gzipped ? gzip.encode(text) : text;
-    }
-    return Uint8List(_headerLength + body.length)
-      ..setAll(0, _magic)
-      ..[3] = format
-      ..setAll(_headerLength, body);
-  }
-
-  static Object? decode(Uint8List bytes) {
-    if (bytes.length < _headerLength ||
-        bytes[0] != _magic[0] ||
-        bytes[1] != _magic[1] ||
-        bytes[2] != _magic[2]) {
-      throw const FormatException('Not a hydrated_mobx value file');
-    }
-    final body = Uint8List.sublistView(bytes, _headerLength);
-    return switch (bytes[3]) {
-      _bytesFormat => Uint8List.fromList(body),
-      _jsonFormat => jsonDecode(utf8.decode(body)),
-      _gzipFormat => jsonDecode(utf8.decode(gzip.decode(body))),
-      final format => throw FormatException('Unknown value format $format'),
-    };
   }
 }

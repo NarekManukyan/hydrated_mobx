@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## [2.1.0] - unreleased
 
 ### Changed
 
@@ -28,16 +28,23 @@
 - `HydratedStorage.build(encoding:, encodeAbove:)` keeps state of more than
   `encodeAbove` bytes (16 KB by default) as UTF-8 JSON
   (`HydratedEncoding.json`) or gzipped JSON (`HydratedEncoding.gzipJson`)
-  instead of decoded maps and lists. For 200 note-sized states that is 142 MB
-  of heap with `tree`, 25 MB with `json` and 2.4 MB with `gzipJson`. The first
+  instead of decoded maps and lists. For 200 note-sized states that is 146 MB
+  of heap with `tree`, 29 MB with `json` and 4.0 MB with `gzipJson`. The first
   build after either setting changes converts the state already in the box,
   back to `tree` too. Versions before 2.1 cannot read an encoded box.
 - `FileStorage` (`package:hydrated_mobx/file_storage.dart`): one file per
   key, nothing in memory until read, with `preload`, a bounded cache of
   recent values, atomic writes and the same eviction as `HydratedStorage`.
-  Not available on the web.
-- `HydratedMobX.transferTokens(from:, to:, where:)` moves state between
-  storages, writing before deleting.
+  One storage per directory at a time, across processes. Files are not
+  encrypted. Not available on the web.
+- `HydratedMobX.transferTokens(from:, to:, where:, onError:)` moves state
+  between storages, writing before deleting. A token that fails to move
+  stays put while the rest move. The same storage on both sides, wrapped or
+  not, throws an `ArgumentError`.
+- `UseTimeStorage` (`usedAt`, `setUsedAt`), implemented by
+  `HydratedStorage`, `FileStorage` and `ForwardingStorage`, so `moveTokens`
+  and `transferTokens` keep each key's use time.
+- The example app's "Large state" screen.
 - `benchmark/memory_benchmark.dart`, for both storages.
 
 ## [2.0.0] - 2026-10-29

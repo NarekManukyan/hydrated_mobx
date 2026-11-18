@@ -14,8 +14,8 @@ void main() {
     await tester.pumpWidget(const HydratedMobXExampleApp());
 
     expect(find.text('Counter'), findsOneWidget);
-    await tester.scrollUntilVisible(find.byKey(const Key('demo_trust')), 200);
-    expect(find.byKey(const Key('demo_trust')), findsOneWidget);
+    await tester.scrollUntilVisible(find.byKey(const Key('demo_large')), 200);
+    expect(find.byKey(const Key('demo_large')), findsOneWidget);
   });
 
   testWidgets('the counter persists its count', (tester) async {
@@ -45,6 +45,7 @@ void main() {
       'inspector',
       'encryption',
       'trust',
+      'large',
     ];
     await tester.pumpWidget(const HydratedMobXExampleApp());
     for (final id in ids) {
@@ -56,5 +57,25 @@ void main() {
       await tester.pageBack();
       await tester.pumpAndSettle();
     }
+  });
+
+  testWidgets('large notes move from the box to files', (tester) async {
+    await tester.pumpWidget(const HydratedMobXExampleApp());
+    final tile = find.byKey(const Key('demo_large'));
+    await tester.scrollUntilVisible(tile, 200);
+    await tester.tap(tile);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('large_add')));
+    await tester.pumpAndSettle();
+    expect(find.text('In the box: 10 · in files: 0'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('large_move')));
+    await tester.pumpAndSettle();
+    expect(find.text('In the box: 0 · in files: 10'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('large_open')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('1000 lines'), findsOneWidget);
   });
 }

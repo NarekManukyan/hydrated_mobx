@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -30,6 +31,19 @@ class _Note extends HydratedMobX with Store {
       _text.value = json['text'] as String;
 }
 
+/// Fails every write of one token's state.
+class _FailingStorage extends ForwardingStorage {
+  _FailingStorage(super.inner, {required this.failing});
+
+  final String failing;
+
+  @override
+  Future<void> write(String key, dynamic value) async {
+    if (key == failing) throw const FileSystemException('disk full');
+    return super.write(key, value);
+  }
+}
+
 Map<String, dynamic> _doc(int size) => {
       'lines': [for (var i = 0; i < size; i++) 'line $i of the document'],
     };
@@ -52,7 +66,7 @@ void main() {
     Duration? maxAge,
   }) =>
       FileStorage.build(
-        directory: dir.path,
+        storageDirectory: HydratedStorageDirectory(dir.path),
         encoding: encoding,
         cacheBytes: cacheBytes,
         maxEntries: maxEntries,
@@ -60,8 +74,11 @@ void main() {
         clock: () => now,
       );
 
+  /// The files of keys and of writes in progress, not the lock file.
   List<String> files() => [
-        for (final entry in dir.listSync()) entry.uri.pathSegments.last,
+        for (final entry in dir.listSync())
+          if (entry.uri.pathSegments.last != '.lock')
+            entry.uri.pathSegments.last,
       ]..sort();
 
   for (final encoding in [HydratedEncoding.json, HydratedEncoding.gzipJson]) {
@@ -111,6 +128,35 @@ void main() {
     await disk.close();
   });
 
+  test('the cache drops the least recently used value first', () async {
+    final probe = await build(encoding: HydratedEncoding.json);
+    await probe.write('x', _doc(60));
+    final size = probe.cachedBytes;
+    await probe.clear();
+    await probe.close();
+
+    // Room for two values: reading a makes b the least recent, so c's
+    // write drops b and keeps a.
+    final disk = await build(
+      encoding: HydratedEncoding.json,
+      cacheBytes: size * 2,
+    );
+    await disk.write('a', _doc(60));
+    await disk.write('b', _doc(60));
+    disk.read('a');
+    await disk.write('c', _doc(60));
+    expect(disk.cachedBytes, size * 2);
+
+    // Removing the files shows which values the cache still holds.
+    for (final name in files()) {
+      File('${dir.path}/$name').deleteSync();
+    }
+    expect(disk.read('a'), _doc(60));
+    expect(disk.read('c'), _doc(60));
+    expect(disk.read('b'), isNull);
+    await disk.close();
+  });
+
   test('keys of any characters round-trip through file names', () async {
     const keys = ['a/b', 'folder:123', 'ünïcødé', '..', 'x.__version'];
     var disk = await build();
@@ -124,6 +170,87 @@ void main() {
     for (final key in keys) {
       expect(disk.read(key), {'k': key});
     }
+    await disk.close();
+  });
+
+  test('keys differing only in case get files of their own', () async {
+    // In base64 these pairs differ only in case, and so would share one
+    // file where names ignore case.
+    const keys = ['aaa', 'aaG', 'note_E', 'note__', 'A', 'a'];
+    var disk = await build();
+    for (final key in keys) {
+      await disk.write(key, {'k': key});
+    }
+    await disk.close();
+
+    final names = files();
+    expect(names.map((name) => name.toLowerCase()).toSet(), hasLength(6));
+    disk = await build();
+    for (final key in keys) {
+      expect(disk.read(key), {'k': key});
+    }
+    await disk.close();
+  });
+
+  test('a key fits only when its version key and temporary file do', () async {
+    final disk = await build();
+    final longest = 'k' * 144;
+    await disk.write(longest, 1);
+    await disk.write('$longest.__version', 2);
+    expect(disk.read('$longest.__version'), 2);
+    expect(() => disk.write('k' * 145, 1), throwsArgumentError);
+    await disk.close();
+  });
+
+  test('one storage at a time per directory', () async {
+    final disk = await build();
+    await expectLater(build(), throwsStateError);
+    await disk.close();
+
+    final again = await build();
+    await again.close();
+  });
+
+  test('another process cannot open the directory while it is open', () async {
+    final disk = await build();
+    final scripts = await Directory.systemTemp.createTemp('hydrated_lock_');
+    addTearDown(() => scripts.delete(recursive: true));
+    final script = File('${scripts.path}/lock.dart')..writeAsStringSync('''
+import 'dart:io';
+
+void main(List<String> args) {
+  final file = File(args.single).openSync(mode: FileMode.write);
+  try {
+    file.lockSync();
+    print('locked');
+  } on FileSystemException {
+    print('busy');
+  }
+}
+''');
+    final other = await Process.run(
+      Platform.resolvedExecutable,
+      [script.path, '${dir.path}/.lock'],
+    );
+    expect('${other.stdout}'.trim(), 'busy');
+    await disk.close();
+  });
+
+  test('deleteAll removes state before its version key', () async {
+    final disk = await build();
+    await disk.write('doc.__version', 2);
+    final version = files().single;
+    await disk.write('doc', {'v': 1});
+    final state = files().singleWhere((name) => name != version);
+    // A directory in place of the version file makes deleting it fail.
+    File('${dir.path}/$version').deleteSync();
+    Directory('${dir.path}/$version').createSync();
+
+    await expectLater(
+      disk.deleteAll(['doc.__version', 'doc']),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(File('${dir.path}/$state').existsSync(), isFalse);
     await disk.close();
   });
 
@@ -231,6 +358,28 @@ void main() {
     await disk.close();
   });
 
+  test('usedAt reads and setUsedAt sets a use time, never a future one',
+      () async {
+    var disk = await build();
+    await disk.write('a', 1);
+    await disk.write('a.__version', 2);
+    expect(disk.usedAt('a'), now);
+    expect(disk.usedAt('a.__version'), isNull);
+    expect(disk.usedAt('absent'), isNull);
+
+    await disk.setUsedAt('a', DateTime(2025));
+    await disk.setUsedAt('absent', DateTime(2025));
+    expect(disk.usedAt('a'), DateTime(2025));
+    await disk.close();
+
+    disk = await build();
+    expect(disk.usedAt('a'), DateTime(2025));
+    await disk.setUsedAt('a', DateTime(2030));
+    expect(disk.usedAt('a'), now);
+    expect(disk.keys.toSet(), {'a', 'a.__version'});
+    await disk.close();
+  });
+
   test('markUsed keeps a key from looking stale', () async {
     var disk = await build();
     await disk.write('a', 1);
@@ -256,7 +405,10 @@ void main() {
 
   test('rejects values JSON cannot hold, and tree encoding', () async {
     final disk = await build();
-    await expectLater(disk.write('a', {1: 2}), throwsA(anything));
+    await expectLater(
+      disk.write('a', {1: 2}),
+      throwsA(isA<JsonUnsupportedObjectError>()),
+    );
     expect(disk.keys, isEmpty);
     await disk.close();
     expect(
@@ -307,6 +459,96 @@ void main() {
       expect(moved, {'same'});
       expect(box.keys, ['differs']);
       expect(disk.read('differs'), {'v': 2});
+      await disk.close();
+    });
+
+    test('refuses the same storage on both sides, wrapped or not', () async {
+      final disk = await build();
+      await disk.write('note_1', {'text': 'a'});
+
+      for (final (from, to) in [
+        (disk, disk),
+        (disk, ForwardingStorage(disk)),
+        (ForwardingStorage(ForwardingStorage(disk)), disk),
+      ]) {
+        await expectLater(
+          HydratedMobX.transferTokens(from: from, to: to, where: (_) => true),
+          throwsArgumentError,
+        );
+      }
+      expect(disk.read('note_1'), {'text': 'a'});
+      await disk.close();
+    });
+
+    test('moves state out of an encoded HydratedStorage, keeping use times',
+        () async {
+      final boxDir = await Directory.systemTemp.createTemp('hydrated_box_');
+      addTearDown(() => boxDir.delete(recursive: true));
+      final box = await HydratedStorage.build(
+        storageDirectory: HydratedStorageDirectory(boxDir.path),
+        encoding: HydratedEncoding.gzipJson,
+        encodeAbove: 0,
+        trackUse: true,
+        clock: () => now,
+      );
+      // Used one day apart, in an order unlike the order of their keys.
+      for (final (key, day) in [('note_c', 0), ('note_a', 1), ('note_b', 2)]) {
+        now = DateTime(2026, 1, day + 1);
+        await box.write(key, _doc(10));
+      }
+      now = DateTime(2026, 2);
+      var disk = await build();
+
+      final moved = await HydratedMobX.transferTokens(
+        from: box,
+        to: disk,
+        where: (token) => token.startsWith('note_'),
+      );
+      await box.close();
+      expect(moved, {'note_a', 'note_b', 'note_c'});
+      expect(disk.read('note_a'), _doc(10));
+      expect(disk.usedAt('note_b'), DateTime(2026, 1, 3));
+      await disk.close();
+
+      // The two used last survive, not the two first by key.
+      disk = await build(maxEntries: 2);
+      expect(disk.keys.toSet(), {'note_a', 'note_b'});
+      await disk.close();
+    });
+
+    test('a token that fails stays, the rest move, and the error is reported',
+        () async {
+      final box = InMemoryStorage({
+        'note_1': {'text': 'a'},
+        'note_2': {'text': 'b'},
+        'note_2.__version': 2,
+        'note_3': {'text': 'c'},
+      });
+      final disk = await build();
+      final target = _FailingStorage(disk, failing: 'note_2');
+      final errors = <String>[];
+
+      final moved = await HydratedMobX.transferTokens(
+        from: box,
+        to: target,
+        where: (_) => true,
+        onError: (token, error, _) => errors.add(token),
+      );
+
+      expect(moved, {'note_1', 'note_3'});
+      expect(errors, ['note_2']);
+      expect(box.keys.toSet(), {'note_2', 'note_2.__version'});
+      // The version written before the failed state write is taken back.
+      expect(disk.keys.toSet(), {'note_1', 'note_3'});
+
+      // Without onError the first failure is rethrown, after the others.
+      box.write('note_4', {'text': 'd'}).ignore();
+      await settle();
+      await expectLater(
+        HydratedMobX.transferTokens(from: box, to: target, where: (_) => true),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(disk.keys, contains('note_4'));
       await disk.close();
     });
 

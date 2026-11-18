@@ -17,7 +17,7 @@ says how to turn its state into JSON and back, and survives app restarts.
 | <img src="doc/screenshots/06_eviction.webp" width="220" alt="Eviction"> | <img src="doc/screenshots/07_observer.webp" width="220" alt="Observer"> | <img src="doc/screenshots/08_inspector.webp" width="220" alt="Storage inspector"> |
 | `maxEntries` keeps the 5 latest | One observer for every store | Every key in every box |
 
-The screens come from the [example app](example), one per feature.
+The screens come from the [example app](example), one per feature area.
 
 ## Features
 
@@ -53,22 +53,25 @@ The screens come from the [example app](example), one per feature.
 | One change to a 2000-row state, time blocking the caller | 1.15 ms | 0.97 ms, **0.41 ms** with `trustToJson` |
 | 500 per-id cache keys | kept forever | **50** kept with `maxEntries: 50` |
 
-`benchmark/memory_benchmark.dart` measures what an open box costs in memory.
-200 note-sized states (900 transcript segments each, 28.7 MB of JSON), none of
-them hydrated:
+`benchmark/memory_benchmark.dart` measures what an open storage costs in
+memory. 200 note-sized states (900 transcript segments each, 28.7 MB of JSON),
+none of them hydrated, Dart 3.13 JIT on an M4 Pro, the median of three runs:
 
 | Storage | Heap held | On disk | Open | Read, per note |
 | --- | --- | --- | --- | --- |
-| `HydratedStorage`, `tree` (default) | 142 MB | 34.9 MB | 264 ms | 0 ms |
-| `HydratedStorage`, `json` | 25 MB | 28.7 MB | 86 ms | 0.57 ms |
-| `HydratedStorage`, `gzipJson` | 2.9 MB | 4.0 MB | 15 ms | 0.66 ms |
-| `FileStorage`, `gzipJson` | **0 MB** | 4.0 MB | 4 ms | 0.71 ms, from disk |
+| `HydratedStorage`, `tree` (default) | 146 MB | 34.9 MB | 248 ms | 0 ms |
+| `HydratedStorage`, `json` | 29 MB | 28.7 MB | 89 ms | 0.52 ms |
+| `HydratedStorage`, `gzipJson` | 4.0 MB | 4.0 MB | 15 ms | 0.57 ms |
+| `FileStorage`, `gzipJson` | **1.4 MB** | 4.0 MB | 4 ms | 0.60 ms, from disk |
+
+Heap figures vary by about a megabyte from run to run, so the `FileStorage`
+figure is within noise of nothing held.
 
 ## Getting started
 
 ```yaml
 dependencies:
-  hydrated_mobx: ^2.0.0
+  hydrated_mobx: ^2.1.0
 ```
 
 Build the storage before `runApp`:
@@ -401,7 +404,7 @@ file and holds nothing in memory until a store reads it:
 import 'package:hydrated_mobx/file_storage.dart';
 
 final notes = await FileStorage.build(
-  directory: '${support.path}/notes',
+  storageDirectory: HydratedStorageDirectory('${support.path}/notes'),
   maxEntries: 50, // optional, as with HydratedStorage
 );
 
@@ -412,14 +415,23 @@ final store = NoteStore(id, storage: notes);
 
 - Opening lists the directory and reads nothing.
 - `read` stays synchronous. A key that was not preloaded or used lately is
-  read from its file there and then, which blocks for that read (0.7 ms for
+  read from its file there and then, which blocks for that read (0.6 ms for
   a 146 KB note in the benchmark, on a Mac; measure on your devices).
 - The last `cacheBytes` (8 MB by default) of encoded values read or written
   stay in memory.
 - A write goes to a temporary file that is renamed over the old one, so a
-  crash keeps the old value or the new one.
+  crash keeps the old value or the new one. `deleteAll` and `clear` delete
+  one file at a time, each state key before its version key: a crash midway
+  leaves some keys, never state without its version.
 - Eviction (`maxAge`, `maxEntries`, `evict`) works as with `HydratedStorage`,
   using each file's modification time as its use time.
+- Files are not encrypted. Keep secrets in an encrypted `HydratedStorage`.
+- One storage at a time may have a directory open. A second `build` on it,
+  from this process or another one (an app extension sharing an app group,
+  say), throws a `StateError` until the first is closed.
+- File names are the key in lowercase base32, so keys that differ only in
+  case stay apart on macOS and Windows. A state key can be up to 144 bytes
+  of UTF-8, which leaves room for its version key.
 - It is not available on the web, so it has its own import.
 
 `HydratedMobX.transferTokens` moves existing state over, once, at startup:
@@ -429,11 +441,17 @@ await HydratedMobX.transferTokens(
   from: HydratedMobX.storage, // the Hive box
   to: notes,
   where: (token) => token.startsWith('note_'),
+  onError: (token, error, stackTrace) => log('kept $token: $error'),
 );
 ```
 
 Each token is written to the new storage before it is deleted from the old
-one, so an interrupted run loses nothing and the next launch finishes it.
+one, so an interrupted run loses nothing and the next launch finishes it. A
+token that fails to move stays where it was while the others move; without
+`onError` the first failure is rethrown once all were tried. Use times move
+along between storages that keep them, so a `maxEntries` on the new storage
+keeps the notes used last. Both sides must be different storages. Moving
+state out of an encrypted box into a `FileStorage` writes it unencrypted.
 
 ## Schema versions
 
@@ -488,7 +506,8 @@ HydratedMobX.storage = await HydratedStorage.build(
 ```
 
 Hive encrypts values, not keys: a store's token (`storagePrefix` plus its id)
-is readable in the box file. Keep secrets out of `storeId`s.
+is readable in the box file. Keep secrets out of `storeId`s. `FileStorage`
+does not encrypt at all.
 
 ## Testing
 
@@ -558,13 +577,16 @@ the keys it deletes, and only once they are bound to the new storage.
   most `encodeAbove` bytes of encoding per write (about 60 µs for 16 KB, AOT
   on an M4 Pro). Larger state is kept as those bytes, gzipped for
   `gzipJson`, and every `read` of it decodes them.
+- A `FileStorage` read of a value not in its cache is a synchronous file
+  read and a decode on the calling isolate. `preload` does the file read
+  ahead, asynchronously; the decode still happens at `read`.
 - hive_ce's `IsolatedHive` is not used: its reads are asynchronous, which a
   constructor-time hydration cannot wait for, and every write would still copy
   the whole state to the other isolate from the calling one.
 
 ## Example app
 
-[`example/`](example) has one screen per feature:
+[`example/`](example) has one screen per feature area:
 
 | Screen | Shows |
 | --- | --- |
@@ -578,6 +600,10 @@ the keys it deletes, and only once they are bound to the new storage.
 | Storage inspector | Every key in every box, with delete and clear |
 | Encryption | An AES-256 box; the note is not in the file as plain text |
 | trustToJson | Time per write of a 2000-row state, with and without it |
+| Large state | Notes kept gzipped in a box, moved to a `FileStorage` with `transferTokens`, opened with `preload` |
+
+`moveTokens` and `LegacyTokens` run once, at startup, before any screen, so
+they have no screen of their own; their tests show them at work.
 
 ```sh
 cd example
