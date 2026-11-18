@@ -167,8 +167,10 @@ abstract class HydratedMobX with Store {
   /// [to] is asked for the new token of every state key in [storage] (the
   /// global one by default); `null` or the same key leaves it where it is.
   /// It gets the stored value as a function, so a key it rejects by name is
-  /// never read (from a `FileStorage`, a read is a file read). The state moves
-  /// with its version key. Returns the moves made, old token to new.
+  /// never read (from a `FileStorage`, a read is a file read). A key that
+  /// moves is read again for the move, so one value at a time is held. The
+  /// state moves with its version key. Returns the moves made, old token to
+  /// new.
   ///
   /// Nothing is overwritten. A move is skipped when:
   /// - the new token already holds different state, or the same state under
@@ -188,15 +190,23 @@ abstract class HydratedMobX with Store {
     final target = storage ?? HydratedMobX.storage;
     final live = liveTokens(storage: target);
     final existing = target.keys.toSet();
-    final values = <String, Object?>{};
-    Object? valueOf(String key) =>
-        values.containsKey(key) ? values[key] : values[key] = target.read(key);
     final planned = <String, String>{};
     final targets = <String>{};
     final clashing = <String>{};
     for (final key in existing) {
       if (isVersionKey(key) || live.contains(key)) continue;
-      final next = to(key, () => valueOf(key));
+      // Read at most once per call of [to], and not kept after it: holding
+      // every value read would hold every decoded state at once, which an
+      // encoded box or a FileStorage exists to avoid.
+      Object? value;
+      var read = false;
+      final next = to(key, () {
+        if (!read) {
+          value = target.read(key);
+          read = true;
+        }
+        return value;
+      });
       if (next == null || next == key || live.contains(next)) continue;
       if (isVersionKey(next)) {
         throw ArgumentError.value(next, 'to', 'returned a version key');
@@ -207,7 +217,7 @@ abstract class HydratedMobX with Store {
     final moved = <String, String>{};
     for (final MapEntry(key: from, value: next) in planned.entries) {
       if (clashing.contains(next)) continue;
-      final value = valueOf(from);
+      final value = target.read(from);
       final fromVersion = versionKeyOf(from);
       if (existing.contains(next)) {
         if (!_jsonEquals(target.read(next), value) ||
