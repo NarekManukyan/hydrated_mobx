@@ -181,11 +181,14 @@ abstract class HydratedMobX with Store {
   ///   deleted. The next run, with B moved, finishes it;
   /// - a live store uses either token, since it would not see the move.
   ///
-  /// A version key left at the new token without its state is replaced.
-  /// When the new token already holds the same state, the old key is
-  /// deleted; that is how an interrupted run finishes. Each move writes the
-  /// version, then the state, then deletes the old keys, so it is safe to run
-  /// again after a crash. Call it at startup, before constructing the stores.
+  /// When the new token already holds the same state under the same
+  /// version, only the old key is deleted; that is how an interrupted run
+  /// finishes. A version key left at the new token without its state is
+  /// replaced.
+  ///
+  /// Each move writes the version, then the state, then deletes the old
+  /// keys, so it is safe to run again after a crash. Call it at startup,
+  /// before constructing the stores.
   static Future<Map<String, String>> moveTokens(
     String? Function(String token, Object? Function() value) to, {
     Storage? storage,
