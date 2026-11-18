@@ -18,6 +18,28 @@ class _Counter extends HydratedMobX with Store {
 }
 
 const _id = '0123456789abcdef0123456789abcdef';
+
+/// Calls a `to` for [HydratedMobX.moveTokens] with [value] as the stored
+/// value.
+String? at(
+  String? Function(String token, Object? Function() value) to,
+  String token,
+  Object? value,
+) =>
+    to(token, () => value);
+
+class _CountingStorage extends ForwardingStorage {
+  _CountingStorage(super.inner);
+
+  final reads = <String>[];
+
+  @override
+  dynamic read(String key) {
+    reads.add(key);
+    return super.read(key);
+  }
+}
+
 const _letterId = 'abcdef0123456789abcdef0123456789';
 
 void main() {
@@ -120,6 +142,24 @@ void main() {
       expect(storage.read('old'), {'count': 1});
     });
 
+    test('reads only the values to asks for, once each', () async {
+      final storage = _CountingStorage(
+        InMemoryStorage({
+          'old': {'count': 1},
+          'other': {'count': 2},
+        }),
+      );
+
+      final moved = await HydratedMobX.moveTokens(
+        (token, value) => token == 'old' && value() is Map ? 'new' : null,
+        storage: storage,
+      );
+
+      expect(moved, {'old': 'new'});
+      expect(storage.reads.where((key) => key == 'old'), hasLength(1));
+      expect(storage.reads, isNot(contains('other')));
+    });
+
     test('rejects a version key as the new token', () {
       final storage = InMemoryStorage({'old': 1});
 
@@ -137,58 +177,104 @@ void main() {
     const user = LegacyStore(
       prefix: 'user',
       legacyPrefix: 'UserStore',
-      keys: ['currentUser', 'settings'],
+      fields: ['currentUser', 'settings'],
     );
     final chat = LegacyStore(
       prefix: 'chat_',
       legacyPrefix: 'ChatStore',
-      keys: const ['messages'],
+      fields: const ['messages'],
       idPattern: RegExp('[0-9a-f]{32}'),
     );
     const tags = LegacyStore(
       prefix: 'tags',
       legacyPrefix: 'TagsStore',
-      keys: ['tags', 'count'],
-      requiredKeys: ['tags', 'count'],
+      fields: ['tags', 'count'],
+      requiredFields: ['tags', 'count'],
     );
     final to = LegacyTokens.match([user, chat, tags], reservedPrefixes: ['n_']);
 
     test('finds keys by their 1.x type name', () {
-      expect(to('UserStore', {'currentUser': 1}), 'user');
-      expect(to('ChatStore$_id', {'messages': <Object>[]}), 'chat_$_id');
+      expect(at(to, 'UserStore', {'currentUser': 1}), 'user');
+      expect(at(to, 'ChatStore$_id', {'messages': <Object>[]}), 'chat_$_id');
     });
 
     test('finds obfuscated keys by the shape of their state', () {
-      expect(to('aB', {'currentUser': 1, 'settings': 2}), 'user');
-      expect(to(r'x$', {'messages': <Object>[]}), 'chat_');
-      expect(to('Qz$_id', {'messages': <Object>[]}), 'chat_$_id');
-      expect(to('Qz$_letterId', {'messages': <Object>[]}), 'chat_$_letterId');
+      expect(at(to, 'aB', {'currentUser': 1, 'settings': 2}), 'user');
+      expect(at(to, r'x$', {'messages': <Object>[]}), 'chat_');
+      expect(at(to, 'Qz$_id', {'messages': <Object>[]}), 'chat_$_id');
+      expect(
+        at(to, 'Qz$_letterId', {'messages': <Object>[]}),
+        'chat_$_letterId',
+      );
+    });
+
+    test('a short obfuscated name keeps a keyed id whole', () {
+      final short = LegacyTokens.match([
+        LegacyStore(
+          prefix: 'chat_',
+          legacyPrefix: 'a',
+          fields: const ['messages'],
+          idPattern: RegExp('[0-9a-f]{32}'),
+        ),
+      ]);
+
+      // 'a' is now some other class: the rest is not an id, so the key is
+      // found by shape, with the class name 'aB'.
+      expect(at(short, 'aB$_id', {'messages': <Object>[]}), 'chat_$_id');
+      expect(at(short, 'a$_id', {'messages': <Object>[]}), 'chat_$_id');
+      expect(at(short, 'a', {'messages': <Object>[]}), 'chat_');
+    });
+
+    test("keeps idPattern's flags", () {
+      final words = LegacyTokens.match([
+        LegacyStore(
+          prefix: 'word_',
+          legacyPrefix: 'WordStore',
+          fields: const ['text'],
+          idPattern: RegExp(r'\p{Ll}{3}', unicode: true),
+        ),
+      ]);
+
+      expect(at(words, 'WordStoreéàü', {'text': ''}), 'word_éàü');
+      expect(at(words, 'Qzéàü', {'text': ''}), 'word_éàü');
+    });
+
+    test('never reads keys under current or reserved prefixes', () {
+      var reads = 0;
+      Object? read() {
+        reads++;
+        return {'currentUser': 1};
+      }
+
+      expect(to('user', read), isNull);
+      expect(to('n_1', read), isNull);
+      expect(reads, 0);
     });
 
     test('a type name now given to another class does not move state', () {
-      expect(to('UserStore', {'messages': <Object>[]}), 'chat_');
-      expect(to('UserStore', {'unknown': 1}), isNull);
+      expect(at(to, 'UserStore', {'messages': <Object>[]}), 'chat_');
+      expect(at(to, 'UserStore', {'unknown': 1}), isNull);
     });
 
     test('requires the shape to fit exactly one store', () {
       final ambiguous = LegacyTokens.match([
         user,
-        const LegacyStore(prefix: 'profile', keys: ['currentUser']),
+        const LegacyStore(prefix: 'profile', fields: ['currentUser']),
       ]);
 
-      expect(ambiguous('aB', {'currentUser': 1}), isNull);
-      expect(to('aB', {'currentUser': 1, 'extra': 2}), isNull);
-      expect(to('aB', {'settings': 2}), isNull);
-      expect(to('aB', {'tags': <Object>[]}), isNull);
-      expect(to('aB', {'tags': <Object>[], 'count': 0}), 'tags');
+      expect(at(ambiguous, 'aB', {'currentUser': 1}), isNull);
+      expect(at(to, 'aB', {'currentUser': 1, 'extra': 2}), isNull);
+      expect(at(to, 'aB', {'settings': 2}), isNull);
+      expect(at(to, 'aB', {'tags': <Object>[]}), isNull);
+      expect(at(to, 'aB', {'tags': <Object>[], 'count': 0}), 'tags');
     });
 
     test('leaves current and reserved prefixes, and non-type keys, alone', () {
-      expect(to('user', {'currentUser': 1}), isNull);
-      expect(to('chat_$_id', {'messages': <Object>[]}), isNull);
-      expect(to('n_1', {'currentUser': 1}), isNull);
-      expect(to('some.key', {'currentUser': 1}), isNull);
-      expect(to('Qz-not-an-id', {'messages': <Object>[]}), isNull);
+      expect(at(to, 'user', {'currentUser': 1}), isNull);
+      expect(at(to, 'chat_$_id', {'messages': <Object>[]}), isNull);
+      expect(at(to, 'n_1', {'currentUser': 1}), isNull);
+      expect(at(to, 'some.key', {'currentUser': 1}), isNull);
+      expect(at(to, 'Qz-not-an-id', {'messages': <Object>[]}), isNull);
     });
 
     test('drives moveTokens', () async {

@@ -520,12 +520,12 @@ await HydratedMobX.moveTokens(LegacyTokens.match([
   LegacyStore(
     prefix: 'user',
     legacyPrefix: '$UserStore',
-    keys: ['currentUser', 'settings'],
+    fields: ['currentUser', 'settings'],
   ),
   LegacyStore(
     prefix: 'chat_',
     legacyPrefix: '$ChatStore',
-    keys: ['messages'],
+    fields: ['messages'],
     idPattern: RegExp('[0-9a-f]{32}'), // one key per chat id
   ),
 ]));
@@ -538,9 +538,19 @@ exactly one store. A name the obfuscator gave to another class never moves one
 store's state onto another, because the shape has to fit either way.
 
 `moveTokens` takes any `(token, value) => newToken?`, so it also handles a
-renamed `storagePrefix`. It moves the version key along, never overwrites
-different state, skips tokens of live stores, and can run again after a crash.
-It returns the moves it made.
+renamed `storagePrefix`. `value` is a function that reads the stored value, so
+keys rejected by name are never read:
+
+```dart
+await HydratedMobX.moveTokens(
+  (token, value) =>
+      token.startsWith('todo-') ? 'todo_${token.substring(5)}' : null,
+);
+```
+
+It moves the version key along, never overwrites different state, skips
+tokens of live stores, and can run again after a crash. It returns the moves
+it made.
 
 ## More
 
