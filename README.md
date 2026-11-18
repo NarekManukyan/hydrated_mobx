@@ -567,8 +567,9 @@ Stored data needs no conversion: 1.x boxes open as they are, under the default
 ### Obfuscated builds
 
 1.x keyed each store by `runtimeType`. In an obfuscated build (Android
-release with `--obfuscate`) that is a short generated name, and the obfuscator
-picks a different one whenever the code around the class changes. Returning
+release with `--obfuscate`) that is a short generated name, and in a web
+release build a minified one such as `minified:Ab`. Either changes whenever
+the code around the class changes. Returning
 `'$CounterStore'` from `storagePrefix` then rarely finds the old key. Move
 the state onto fixed prefixes once, at startup, before any store exists:
 
