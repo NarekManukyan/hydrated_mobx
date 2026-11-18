@@ -14,6 +14,7 @@ import 'package:hydrated_mobx/src/gzip/gzip.dart';
 import 'package:hydrated_mobx/src/hydrated_cipher.dart';
 import 'package:hydrated_mobx/src/hydrated_encoding.dart';
 import 'package:hydrated_mobx/src/hydrated_mobx.dart';
+import 'package:hydrated_mobx/src/pending_deletes.dart';
 import 'package:meta/meta.dart';
 import 'package:synchronized/synchronized.dart';
 
@@ -318,28 +319,9 @@ class HydratedStorage implements UseTrackingStorage {
 
   final _lock = Lock();
 
-  /// Keys a queued [deleteAll] or [clear] will remove, with how many queued
-  /// deletes name each. [read] and [keys] treat them as gone already, so a
-  /// store built while the delete waits for [_lock] does not hydrate a value
-  /// that is about to disappear.
-  final _deleting = <String, int>{};
-
-  /// Runs [delete] under [_lock] with [keys] hidden from [read] and [keys]
-  /// from now until it finishes.
-  Future<void> _hideWhile(
-    String operation,
-    List<String> keys,
-    Future<void> Function() delete,
-  ) {
-    for (final key in keys) {
-      _deleting.update(key, (n) => n + 1, ifAbsent: () => 1);
-    }
-    return _locked(operation, delete).whenComplete(() {
-      for (final key in keys) {
-        if (_deleting.update(key, (n) => n - 1) == 0) _deleting.remove(key);
-      }
-    });
-  }
+  /// Keys a queued [deleteAll] or [clear] will remove, which [read] and
+  /// [keys] treat as gone already.
+  final _pending = PendingDeletes();
 
   void _checkOpen(String operation) {
     if (!_box.isOpen) throw StorageClosedException(operation);
@@ -362,7 +344,7 @@ class HydratedStorage implements UseTrackingStorage {
   @override
   dynamic read(String key) {
     _checkOpen('read');
-    if (_deleting.containsKey(key)) return null;
+    if (_pending.hides(key)) return null;
     return _codec.decode(_box.get(key));
   }
 
@@ -370,9 +352,7 @@ class HydratedStorage implements UseTrackingStorage {
   Iterable<String> get keys {
     _checkOpen('list keys');
     final keys = _box.keys.whereType<String>();
-    return _deleting.isEmpty
-        ? keys
-        : keys.where((key) => !_deleting.containsKey(key));
+    return _pending.isEmpty ? keys : keys.where((key) => !_pending.hides(key));
   }
 
   @override
@@ -391,13 +371,15 @@ class HydratedStorage implements UseTrackingStorage {
     _checkOpen('delete');
     final list = keys.toList();
     if (list.isEmpty) return Future.value();
-    return _hideWhile(
-      'delete',
+    return _pending.delete(
       list,
-      () => Future.wait([
-        _box.deleteAll(list),
-        if (_meta case final meta?) meta.deleteAll(list),
-      ]),
+      () => _locked(
+        'delete',
+        () => Future.wait([
+          _box.deleteAll(list),
+          if (_meta case final meta?) meta.deleteAll(list),
+        ]),
+      ),
     );
   }
 
@@ -407,20 +389,19 @@ class HydratedStorage implements UseTrackingStorage {
     // Suspend this storage's live stores now, not when the lock frees up: a
     // write they queued meanwhile would land after the wipe.
     HydratedMobX.suspendAll(storage: this);
-    // Keys written after this call land after the wipe, so only the ones
-    // stored now are hidden.
-    return _hideWhile('clear', _box.keys.whereType<String>().toList(),
-        () async {
-      await Future.wait([
-        _box.clear(),
-        if (_meta case final meta?) meta.clear(),
-      ]);
-      // The record went with the rest; values written from now on are kept
-      // in this setting, which a later build must know to convert from.
-      if (_codec.encoding != HydratedEncoding.tree) {
-        await _box.put(_encodingKey, _setting);
-      }
-    });
+    return _pending.clear(
+      () => _locked('clear', () async {
+        await Future.wait([
+          _box.clear(),
+          if (_meta case final meta?) meta.clear(),
+        ]);
+        // The record went with the rest; values written from now on are kept
+        // in this setting, which a later build must know to convert from.
+        if (_codec.encoding != HydratedEncoding.tree) {
+          await _box.put(_encodingKey, _setting);
+        }
+      }),
+    );
   }
 
   @override

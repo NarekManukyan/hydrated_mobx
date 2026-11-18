@@ -668,6 +668,25 @@ void main() {
       await disk.close();
     });
 
+    test('a key written just before a clear stays hidden until it is wiped',
+        () async {
+      final disk = await build();
+      // Queued before the clear, so it lands first and the clear wipes it.
+      final writing = disk.write('new', 1);
+      final clearing = disk.clear();
+      final seen = <Object?>[];
+      final done = writing.then((_) {
+        seen
+          ..add(disk.read('new'))
+          ..add(disk.keys.toList());
+      });
+
+      await Future.wait([done, clearing]);
+      expect(seen, [isNull, isEmpty]);
+      expect(disk.keys, isEmpty);
+      await disk.close();
+    });
+
     test('keys and deleteAll', () async {
       final disk = await build();
       await disk.write('a', 1);
