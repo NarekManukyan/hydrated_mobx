@@ -535,7 +535,18 @@ await HydratedMobX.moveTokens(LegacyTokens.match([
 survived, and otherwise by the shape of its value: a key that looks like a
 class name (plus an id, for a keyed store) whose top-level JSON keys fit
 exactly one store. A name the obfuscator gave to another class never moves one
-store's state onto another, because the shape has to fit either way.
+listed store's state onto another, because the shape has to fit either way.
+
+Only the listed stores' prefixes are left alone. A current store you did not
+list, whose state has the same fields as a listed one, could be moved onto it,
+so pass every other prefix your app writes as `reservedPrefixes`:
+
+```dart
+LegacyTokens.match(stores, reservedPrefixes: ['settings', 'draft_'])
+```
+
+With a variable-length `idPattern` such as `RegExp(r'\d+')`, the longest id
+the pattern accepts is taken: `Qz123` moves to id `123`.
 
 `moveTokens` takes any `(token, value) => newToken?`, so it also handles a
 renamed `storagePrefix`. `value` is a function that reads the stored value, so

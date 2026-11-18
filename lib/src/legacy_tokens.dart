@@ -37,9 +37,6 @@ class LegacyStore {
   /// single key.
   final RegExp? idPattern;
 
-  /// Whether the store has one key per id.
-  bool get keyed => idPattern != null;
-
   /// Whether [value] has the shape of this store's state.
   bool owns(Object? value) {
     if (value is! Map) return false;
@@ -54,6 +51,9 @@ class LegacyStore {
 abstract final class LegacyTokens {
   /// A Dart class name, which is what 1.x keys started with.
   static final _identifier = RegExp(r'[A-Za-z_$][A-Za-z0-9_$]*');
+
+  /// The shortest class name that leaves a valid id after it.
+  static const _shortestIdentifier = r'[A-Za-z_$][A-Za-z0-9_$]*?';
 
   /// Returns a `to` for [HydratedMobX.moveTokens] that moves the state of
   /// [stores] off their 1.x keys:
@@ -72,7 +72,9 @@ abstract final class LegacyTokens {
   /// whenever the code around them changes, so a key is also matched by
   /// shape: a key that looks like a class name (followed by an id the
   /// store's [LegacyStore.idPattern] accepts, for a keyed store) whose value
-  /// has the shape of exactly one store.
+  /// has the shape of exactly one store. Where the name could end in
+  /// characters the id also accepts, the longest such id is taken: with
+  /// `RegExp(r'\d+')`, `Qz123` is id `123`.
   ///
   /// Both ways require the value to have the store's shape, and for a keyed
   /// store the rest of the key to be an id [LegacyStore.idPattern] accepts,
@@ -101,12 +103,12 @@ abstract final class LegacyTokens {
         if (store.idPattern case final id?)
           store: like(id, '^(?:${id.pattern})\$'),
     };
-    // A class name and an id. Backtracks so the name ends where the id
-    // starts, whatever characters the two share.
+    // A class name and an id. The name is as short as it can be, so the id
+    // is as long as the pattern allows, whatever characters the two share.
     final keyedTokens = {
       for (final store in stores)
         if (store.idPattern case final id?)
-          store: like(id, '^${_identifier.pattern}(${id.pattern})\$'),
+          store: like(id, '^$_shortestIdentifier(${id.pattern})\$'),
     };
     return (token, read) {
       if (owned.any(token.startsWith)) return null;

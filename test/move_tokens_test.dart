@@ -18,10 +18,11 @@ class _Counter extends HydratedMobX with Store {
 }
 
 const _id = '0123456789abcdef0123456789abcdef';
+const _letterId = 'abcdef0123456789abcdef0123456789';
 
 /// Calls a `to` for [HydratedMobX.moveTokens] with [value] as the stored
 /// value.
-String? at(
+String? _at(
   String? Function(String token, Object? Function() value) to,
   String token,
   Object? value,
@@ -39,8 +40,6 @@ class _CountingStorage extends ForwardingStorage {
     return super.read(key);
   }
 }
-
-const _letterId = 'abcdef0123456789abcdef0123456789';
 
 void main() {
   group('moveTokens', () {
@@ -196,16 +195,16 @@ void main() {
     final to = LegacyTokens.match([user, chat, tags], reservedPrefixes: ['n_']);
 
     test('finds keys by their 1.x type name', () {
-      expect(at(to, 'UserStore', {'currentUser': 1}), 'user');
-      expect(at(to, 'ChatStore$_id', {'messages': <Object>[]}), 'chat_$_id');
+      expect(_at(to, 'UserStore', {'currentUser': 1}), 'user');
+      expect(_at(to, 'ChatStore$_id', {'messages': <Object>[]}), 'chat_$_id');
     });
 
     test('finds obfuscated keys by the shape of their state', () {
-      expect(at(to, 'aB', {'currentUser': 1, 'settings': 2}), 'user');
-      expect(at(to, r'x$', {'messages': <Object>[]}), 'chat_');
-      expect(at(to, 'Qz$_id', {'messages': <Object>[]}), 'chat_$_id');
+      expect(_at(to, 'aB', {'currentUser': 1, 'settings': 2}), 'user');
+      expect(_at(to, r'x$', {'messages': <Object>[]}), 'chat_');
+      expect(_at(to, 'Qz$_id', {'messages': <Object>[]}), 'chat_$_id');
       expect(
-        at(to, 'Qz$_letterId', {'messages': <Object>[]}),
+        _at(to, 'Qz$_letterId', {'messages': <Object>[]}),
         'chat_$_letterId',
       );
     });
@@ -222,9 +221,23 @@ void main() {
 
       // 'a' is now some other class: the rest is not an id, so the key is
       // found by shape, with the class name 'aB'.
-      expect(at(short, 'aB$_id', {'messages': <Object>[]}), 'chat_$_id');
-      expect(at(short, 'a$_id', {'messages': <Object>[]}), 'chat_$_id');
-      expect(at(short, 'a', {'messages': <Object>[]}), 'chat_');
+      expect(_at(short, 'aB$_id', {'messages': <Object>[]}), 'chat_$_id');
+      expect(_at(short, 'a$_id', {'messages': <Object>[]}), 'chat_$_id');
+      expect(_at(short, 'a', {'messages': <Object>[]}), 'chat_');
+    });
+
+    test('takes the longest id a variable-length pattern accepts', () {
+      final numbered = LegacyTokens.match([
+        LegacyStore(
+          prefix: 'note_',
+          fields: const ['text'],
+          idPattern: RegExp(r'\d+'),
+        ),
+      ]);
+
+      expect(_at(numbered, 'Qz123', {'text': ''}), 'note_123');
+      expect(_at(numbered, 'Qz10', {'text': ''}), 'note_10');
+      expect(_at(numbered, 'Q7', {'text': ''}), 'note_7');
     });
 
     test("keeps idPattern's flags", () {
@@ -237,8 +250,8 @@ void main() {
         ),
       ]);
 
-      expect(at(words, 'WordStoreéàü', {'text': ''}), 'word_éàü');
-      expect(at(words, 'Qzéàü', {'text': ''}), 'word_éàü');
+      expect(_at(words, 'WordStoreéàü', {'text': ''}), 'word_éàü');
+      expect(_at(words, 'Qzéàü', {'text': ''}), 'word_éàü');
     });
 
     test('never reads keys under current or reserved prefixes', () {
@@ -254,8 +267,8 @@ void main() {
     });
 
     test('a type name now given to another class does not move state', () {
-      expect(at(to, 'UserStore', {'messages': <Object>[]}), 'chat_');
-      expect(at(to, 'UserStore', {'unknown': 1}), isNull);
+      expect(_at(to, 'UserStore', {'messages': <Object>[]}), 'chat_');
+      expect(_at(to, 'UserStore', {'unknown': 1}), isNull);
     });
 
     test('requires the shape to fit exactly one store', () {
@@ -264,19 +277,19 @@ void main() {
         const LegacyStore(prefix: 'profile', fields: ['currentUser']),
       ]);
 
-      expect(at(ambiguous, 'aB', {'currentUser': 1}), isNull);
-      expect(at(to, 'aB', {'currentUser': 1, 'extra': 2}), isNull);
-      expect(at(to, 'aB', {'settings': 2}), isNull);
-      expect(at(to, 'aB', {'tags': <Object>[]}), isNull);
-      expect(at(to, 'aB', {'tags': <Object>[], 'count': 0}), 'tags');
+      expect(_at(ambiguous, 'aB', {'currentUser': 1}), isNull);
+      expect(_at(to, 'aB', {'currentUser': 1, 'extra': 2}), isNull);
+      expect(_at(to, 'aB', {'settings': 2}), isNull);
+      expect(_at(to, 'aB', {'tags': <Object>[]}), isNull);
+      expect(_at(to, 'aB', {'tags': <Object>[], 'count': 0}), 'tags');
     });
 
     test('leaves current and reserved prefixes, and non-type keys, alone', () {
-      expect(at(to, 'user', {'currentUser': 1}), isNull);
-      expect(at(to, 'chat_$_id', {'messages': <Object>[]}), isNull);
-      expect(at(to, 'n_1', {'currentUser': 1}), isNull);
-      expect(at(to, 'some.key', {'currentUser': 1}), isNull);
-      expect(at(to, 'Qz-not-an-id', {'messages': <Object>[]}), isNull);
+      expect(_at(to, 'user', {'currentUser': 1}), isNull);
+      expect(_at(to, 'chat_$_id', {'messages': <Object>[]}), isNull);
+      expect(_at(to, 'n_1', {'currentUser': 1}), isNull);
+      expect(_at(to, 'some.key', {'currentUser': 1}), isNull);
+      expect(_at(to, 'Qz-not-an-id', {'messages': <Object>[]}), isNull);
     });
 
     test('drives moveTokens', () async {
