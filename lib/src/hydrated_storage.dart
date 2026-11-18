@@ -81,7 +81,10 @@ abstract class UseTimeStorage implements UseTrackingStorage {
 
 /// {@template forwarding_storage}
 /// A [Storage] that forwards every call to [inner]; extend it to wrap a
-/// storage (to count, log or delay writes) and override what you need.
+/// storage (to count or log writes, say) and override what you need. A
+/// wrapper that holds a [write], [deleteAll] or [clear] back before passing
+/// it on must also have [read] and [keys] show it from the moment it is
+/// called, as the [Storage] contract requires.
 ///
 /// Stores bind to the wrapper, not to [inner], so [clear] suspends the
 /// wrapper's stores before clearing [inner].
@@ -354,8 +357,8 @@ class HydratedStorage implements UseTimeStorage {
 
   final _lock = Lock();
 
-  /// Keys a queued [deleteAll] or [clear] will remove, which [read] and
-  /// [keys] treat as gone already.
+  /// The writes, deletes and clears queued behind [_lock], which [read] and
+  /// [keys] show from the moment each is called.
   final _pending = PendingChanges();
 
   void _checkOpen(String operation) {

@@ -227,8 +227,8 @@ class FileStorage implements UseTimeStorage {
   final RandomAccessFile _lockFile;
   bool _closed = false;
 
-  /// Keys a queued [deleteAll] or [clear] will remove, which [read] and
-  /// [keys] treat as gone already.
+  /// The writes, deletes and clears queued behind [_lock], which [read] and
+  /// [keys] show from the moment each is called.
   final _pending = PendingChanges();
 
   static String _nameOf(String key) {
@@ -368,6 +368,7 @@ class FileStorage implements UseTimeStorage {
   @override
   Iterable<String> get keys {
     _checkOpen('list keys');
+    if (_pending.isEmpty) return _keys.toList();
     return [
       for (final key in _keys)
         if (!_pending.hides(key)) key,

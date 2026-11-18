@@ -29,6 +29,16 @@ class _Note extends HydratedMobX with Store {
   @override
   void fromJson(Map<String, dynamic> json) =>
       _text.value = json['text'] as String;
+
+  /// The versions [migrate] was called for.
+  final migrated = <int>[];
+
+  /// Drops version-1 notes.
+  @override
+  Map<String, dynamic>? migrate(int oldVersion, Map<String, dynamic> old) {
+    migrated.add(oldVersion);
+    return null;
+  }
 }
 
 /// Fails every attempt to set a use time.
@@ -718,6 +728,42 @@ void main(List<String> args) {
     second.text = 'v2+edit';
     await second.flush();
     expect(disk.read('note_1'), {'text': 'v2+edit'});
+    await disk.close();
+  });
+
+  test('a store rebuilt before its first version stamp lands is not migrated',
+      () async {
+    final disk = await build();
+    // The note's first write also stamps its version, once the state lands.
+    final first = _Note('1', storage: disk)
+      ..text = 'new'
+      ..dispose();
+
+    final second = _Note('1', storage: disk);
+    addTearDown(second.dispose);
+    expect(second.text, 'new');
+    expect(second.migrated, isEmpty);
+    await first.flush();
+    await second.flush();
+    expect(disk.read('note_1'), {'text': 'new'});
+    expect(disk.read(HydratedMobX.versionKeyOf('note_1')), 2);
+    await disk.close();
+  });
+
+  test(
+      'a stamp still to come through a wrapper counts for the storage it '
+      'wraps', () async {
+    final disk = await build();
+    final first = _Note('1', storage: _NoUseTimes(disk))
+      ..text = 'new'
+      ..dispose();
+
+    final second = _Note('1', storage: disk);
+    addTearDown(second.dispose);
+    expect(second.text, 'new');
+    expect(second.migrated, isEmpty);
+    await first.flush();
+    await second.flush();
     await disk.close();
   });
 

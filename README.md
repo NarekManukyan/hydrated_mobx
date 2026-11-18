@@ -539,9 +539,11 @@ under test to start it from a known state.
 
 ## Wrapping or writing a storage
 
-To wrap a storage (count, log or delay writes), extend `ForwardingStorage` and
-override what you need. It forwards everything to `inner`, suspends its own
-stores on `clear`, and passes eviction use times through.
+To wrap a storage (to count or log writes, say), extend `ForwardingStorage`
+and override what you need. It forwards everything to `inner`, suspends its
+own stores on `clear`, and passes eviction use times through. A wrapper that
+holds a write, delete or clear back before passing it on must also have `read`
+and `keys` show it from the moment it is called, as described below.
 
 ```dart
 class LoggingStorage extends ForwardingStorage {

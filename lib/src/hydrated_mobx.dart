@@ -504,6 +504,14 @@ abstract class HydratedMobX with Store {
   static final Finalizer<WeakReference<HydratedMobX>> _finalizer =
       Finalizer<WeakReference<HydratedMobX>>(_instances.remove);
 
+  /// State writes whose version stamp has not landed yet, by storage and
+  /// token. A storage shows a write from the moment it is called, but the
+  /// stamp is written only once the state has landed, so a store built in
+  /// between would read the new state under the old version and migrate it
+  /// again. Kept under the bound storage and every storage it wraps.
+  static final _stamping =
+      Expando<Map<String, List<({Object json, int version})>>>();
+
   /// Live stores bound to [storage], or all of them when it is `null`.
   /// With [throughWrappers], a store bound to a [ForwardingStorage] that
   /// wraps [storage] counts too, since it writes into [storage].
@@ -681,7 +689,8 @@ abstract class HydratedMobX with Store {
   void _readStored(Storage target) {
     try {
       // The persistence run stamps [version] only after the state that
-      // produced it has been written, so the version never leads the state.
+      // produced it has been written, so the version never leads the state;
+      // [_restore] reads state whose stamp is still to come as that version.
       final rawVersion = target.read(_versionToken);
       if (rawVersion != null && rawVersion is! int) {
         log(
@@ -710,7 +719,8 @@ abstract class HydratedMobX with Store {
     }
     // Data written before schema versioning existed has no version key and
     // is treated as version 1.
-    final storedVersion = _lastStampedVersion ?? 1;
+    final storedVersion =
+        _stampingVersion(target, stored) ?? _lastStampedVersion ?? 1;
     Map<String, dynamic>? json = plainJson(stored)! as Map<String, dynamic>;
     if (storedVersion < version) {
       json = migrate(storedVersion, json);
@@ -731,6 +741,37 @@ abstract class HydratedMobX with Store {
     // The storage's own value, not the copy fromJson may keep and mutate.
     if (storedVersion == version) _lastPersisted = stored;
     if (storedVersion < version) _notifyMigrated(storedVersion);
+  }
+
+  /// The version [stored] is about to be stamped with, when it is the state
+  /// of a write to [target] whose stamp has not landed yet.
+  int? _stampingVersion(Storage target, Object stored) {
+    final writes = _stamping[target]?[storageToken];
+    if (writes == null) return null;
+    for (final write in writes.reversed) {
+      if (_jsonEquals(write.json, stored)) return write.version;
+    }
+    return null;
+  }
+
+  /// Records that [json] is being written to [target] with a version stamp
+  /// to follow, and returns the function that forgets it again.
+  void Function() _startStamp(Storage target, Map<String, dynamic> json) {
+    final write = (json: json as Object, version: version);
+    final token = storageToken;
+    final maps = <Map<String, List<({Object json, int version})>>>[];
+    for (Storage? s = target; s != null;) {
+      final byToken = _stamping[s] ??= {};
+      (byToken[token] ??= []).add(write);
+      maps.add(byToken);
+      s = s is ForwardingStorage ? s.inner : null;
+    }
+    return () {
+      for (final byToken in maps) {
+        final writes = byToken[token]!..remove(write);
+        if (writes.isEmpty) byToken.remove(token);
+      }
+    };
   }
 
   /// Tells the observer, once the store holds the migrated state; a failing
@@ -808,6 +849,7 @@ abstract class HydratedMobX with Store {
     final target = _boundStorage!;
     var done = Future.sync(() => target.write(storageToken, json));
     if (stamp) {
+      final stamped = _startStamp(target, json);
       // Stamp the version only after the state write succeeds, so a failure
       // or crash leaves the version behind the state (which re-runs
       // migration) rather than ahead of it (which would skip one).
@@ -820,7 +862,7 @@ abstract class HydratedMobX with Store {
           // change, and not after a clear that reset it meanwhile.
           if (generation == _clearGeneration) _lastStampedVersion = version;
         });
-      });
+      }).whenComplete(stamped);
     }
     return done.catchError((Object error, StackTrace stackTrace) {
       // Write the same state again on the next run.

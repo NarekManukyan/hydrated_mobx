@@ -645,6 +645,26 @@ void main() {
       await disk.close();
     });
 
+    test(
+        'a store rebuilt before its migration is stamped is not migrated '
+        'again', () async {
+      final disk = await build();
+      await disk.write('migrating', {'old': 3}); // Version 1 data.
+      // Writes the migrated state, then stamps version 2 once it lands.
+      final first = _Migrating(storage: disk);
+      expect(first.count, 3);
+      first.dispose();
+
+      final second = _Migrating(storage: disk);
+      addTearDown(second.dispose);
+      expect(second.count, 3);
+      await first.flush();
+      await second.flush();
+      expect(disk.read('migrating'), {'count': 3});
+      expect(disk.read(HydratedMobX.versionKeyOf('migrating')), 2);
+      await disk.close();
+    });
+
     test('a store built while a delete waits does not hydrate its value',
         () async {
       final disk = await build();
@@ -1322,7 +1342,7 @@ class _ThrowingMigrateObserver extends HydratedObserver {
 
 /// Version 2 store renaming `old` to `count`.
 class _Migrating extends HydratedMobX with Store {
-  _Migrating({super.onStorageError});
+  _Migrating({super.onStorageError, super.storage});
 
   final Observable<int> _count = Observable(0);
 

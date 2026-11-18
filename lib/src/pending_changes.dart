@@ -26,12 +26,14 @@ class PendingChanges {
   bool get isEmpty => _writes.isEmpty && _deletes.isEmpty && _clears.isEmpty;
 
   /// When the latest queued delete or clear naming [key] was called.
+  /// Both lists hold calls in the order they were made, so the last of
+  /// each is its latest.
   int? _deletedAt(String key) {
-    int? latest;
-    for (final call in [...?_deletes[key], ..._clears]) {
-      if (latest == null || call > latest) latest = call;
-    }
-    return latest;
+    final deleted = _deletes[key]?.last;
+    final cleared = _clears.isEmpty ? null : _clears.last;
+    if (deleted == null) return cleared;
+    if (cleared == null) return deleted;
+    return deleted > cleared ? deleted : cleared;
   }
 
   /// Whether [key] is to be treated as deleted already.
