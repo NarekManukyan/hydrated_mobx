@@ -10,6 +10,11 @@
   compile as before, but an override, a fake or a mock of `evict` must now
   accept `keepLive` and return the set (for mocktail,
   `thenAnswer((_) async => <String>{})`).
+- The `Storage` contract asks more of a storage whose `deleteAll` or `clear`
+  can wait behind other work (a lock, a queue): its `read` and `keys` must
+  treat a key as gone from the moment a delete or clear naming it is called.
+  A storage that deletes synchronously, like `InMemoryStorage`, already
+  does.
 
 ### Added
 
