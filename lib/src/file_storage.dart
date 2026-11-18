@@ -532,14 +532,15 @@ class FileStorage implements UseTimeStorage {
       ];
       await _loadUseTimes(accepted);
       return evictionsAmong(
-        // A delete may have been queued since the candidates were listed,
-        // by [where] or while the use times loaded.
-        accepted.where((key) => !_pending.hides(key)),
+        accepted,
         usedAt: _usedAtOf,
         now: _clock().millisecondsSinceEpoch,
         olderThan: olderThan,
         maxEntries: maxEntries,
         live: keepLive ? () => HydratedMobX.liveTokens(storage: this) : null,
+        // A delete may have been queued since the candidates were listed,
+        // by [where] or while the use times loaded.
+        gone: _pending.hides,
       );
     });
     if (doomed.isEmpty) return doomed;
