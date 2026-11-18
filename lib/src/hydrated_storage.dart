@@ -460,7 +460,9 @@ class HydratedStorage implements UseTrackingStorage {
     final live = keepLive ? HydratedMobX.liveTokens(storage: this) : null;
     final candidates = [
       for (final key in accepted)
-        if (!(live?.contains(key) ?? false))
+        // [where] may also have queued a delete: that key is going anyway,
+        // and must not take a place [maxEntries] keeps.
+        if (!(live?.contains(key) ?? false) && !_pending.hides(key))
           (key: key, usedAt: _usedAt(meta, key) ?? now),
     ];
     final doomed = <String>{};

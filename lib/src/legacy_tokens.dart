@@ -81,9 +81,10 @@ abstract final class LegacyTokens {
   /// or nothing: a key without an id moves to the store's [LegacyStore.prefix]
   /// alone, the token of that store built without a `storeId`. So a name
   /// this build gave to a different class never moves one listed store's
-  /// state onto another. Keys starting with
-  /// a store's current prefix or one of [reservedPrefixes] are never read or
-  /// moved.
+  /// state onto another.
+  ///
+  /// Keys starting with a store's current prefix or one of
+  /// [reservedPrefixes] are never read or moved.
   static String? Function(String token, Object? Function() value) match(
     List<LegacyStore> stores, {
     Iterable<String> reservedPrefixes = const [],
