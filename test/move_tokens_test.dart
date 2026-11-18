@@ -331,7 +331,7 @@ void main() {
       expect(_at(anchored, 'Qz$_id', {'messages': <Object>[]}), 'chat_$_id');
     });
 
-    test('a type name now given to another class does not move state', () {
+    test('a type name now given to another class moves state by its shape', () {
       expect(_at(to, 'UserStore', {'messages': <Object>[]}), 'chat_');
       expect(_at(to, 'UserStore', {'unknown': 1}), isNull);
     });
