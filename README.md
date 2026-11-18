@@ -72,7 +72,7 @@ figure is within noise of nothing held.
 
 ```yaml
 dependencies:
-  hydrated_mobx: ^2.1.0
+  hydrated_mobx: ^3.0.0
 ```
 
 Build the storage before `runApp`:
@@ -396,7 +396,7 @@ changes converts what is already in the box, back to `tree` too; later builds
 skip that walk. A live store also keeps the decoded state it last hydrated or
 wrote, to skip unchanged writes, so encoding saves the memory of state whose
 store does not exist, not of the one on screen. Do not let a version of
-hydrated_mobx before 2.1 open an encoded box: it cannot read the encoded
+hydrated_mobx before 3.0 open an encoded box: it cannot read the encoded
 values, and its stores would overwrite them.
 
 ### One file per key

@@ -15,7 +15,7 @@ class LargeNoteStore extends HydratedMobX with Store {
   List<String> get lines => _lines.value;
 
   /// Fills the transcript with [count] lines.
-  void write(int count) => runInAction(
+  void fill(int count) => runInAction(
     () => _lines.value = [
       for (var i = 0; i < count; i++)
         'Speaker ${i % 3}: line $i of the meeting transcript, '

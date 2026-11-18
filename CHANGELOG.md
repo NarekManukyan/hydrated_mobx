@@ -1,6 +1,10 @@
 # Changelog
 
-## [2.1.0] - unreleased
+## [3.0.0] - unreleased
+
+A major release: the changes below break code that implements, fakes or
+mocks `HydratedStorage` or `ForwardingStorage`. Code that only calls them
+compiles as before.
 
 ### Changed
 
@@ -44,7 +48,7 @@
   instead of decoded maps and lists. For 200 note-sized states that is 146 MB
   of heap with `tree`, 29 MB with `json` and 4.0 MB with `gzipJson`. The first
   build after either setting changes converts the state already in the box,
-  back to `tree` too. Versions before 2.1 cannot read an encoded box.
+  back to `tree` too. Versions before 3.0 cannot read an encoded box.
 - `FileStorage` (`package:hydrated_mobx/file_storage.dart`): one file per
   key, nothing in memory until read, with `preload`, a bounded cache of
   recent values, atomic writes and the same eviction as `HydratedStorage`.

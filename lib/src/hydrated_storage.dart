@@ -251,7 +251,7 @@ class HydratedStorage implements UseTimeStorage {
   ///   values already in the box to it, back to [HydratedEncoding.tree]
   ///   included; later builds skip that. Any value reads back whatever the
   ///   setting. A box with encoded values must not be opened by
-  ///   hydrated_mobx before 2.1: it would fail to hydrate them, and
+  ///   hydrated_mobx before 3.0: it would fail to hydrate them, and
   ///   overwrite them.
   /// - [compactionStrategy] overrides when Hive rewrites the box file.
   static Future<HydratedStorage> build({

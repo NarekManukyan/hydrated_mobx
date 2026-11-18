@@ -62,7 +62,7 @@ class _LargeStatePageState extends State<LargeStatePage> {
   Future<String> _addToBox() async {
     final first = _nextId();
     for (var id = first; id < first + _kNotesPerTap; id++) {
-      final store = LargeNoteStore('$id', _box)..write(_kLinesPerNote);
+      final store = LargeNoteStore('$id', _box)..fill(_kLinesPerNote);
       try {
         await store.flush();
       } finally {

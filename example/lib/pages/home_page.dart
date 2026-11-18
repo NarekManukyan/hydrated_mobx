@@ -108,7 +108,7 @@ class HomePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('hydrated_mobx 2.1')),
+      appBar: AppBar(title: const Text('hydrated_mobx 3.0')),
       body: ListView.separated(
         padding: const EdgeInsets.symmetric(vertical: 8),
         itemCount: _kDemos.length,
