@@ -545,6 +545,25 @@ void main(List<String> args) {
     await disk.close();
   });
 
+  test('a write that fails leaves no temp file behind', () async {
+    final disk = await build();
+    await disk.write('a', 1);
+    final name = files().single;
+    await disk.delete('a');
+    // A directory where the file goes makes the rename fail.
+    Directory('${dir.path}/$name').createSync();
+
+    await expectLater(disk.write('a', 2), throwsA(isA<FileSystemException>()));
+    expect(
+      dir
+          .listSync()
+          .map((entry) => entry.path)
+          .where((p) => p.endsWith('.tmp')),
+      isEmpty,
+    );
+    await disk.close();
+  });
+
   test('a markUsed queued behind close leaves the file alone', () async {
     final disk = await build();
     await disk.write('a', 1);

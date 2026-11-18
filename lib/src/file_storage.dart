@@ -370,8 +370,15 @@ class FileStorage implements UseTimeStorage {
         return _locked('write', () async {
           final file = _fileOf(key);
           final temp = File('${file.path}$_tempExtension');
-          await temp.writeAsBytes(bytes, flush: true);
-          await temp.rename(file.path);
+          try {
+            await temp.writeAsBytes(bytes, flush: true);
+            await temp.rename(file.path);
+          } catch (_) {
+            // A partial temp file would hold its bytes until the next build,
+            // which on a full disk keeps every later write failing.
+            await temp.delete().then((_) {}, onError: (Object _) {});
+            rethrow;
+          }
           _keys.add(key);
           _cachePut(key, bytes);
           // The rename left the file the time of this write. Its use time is
