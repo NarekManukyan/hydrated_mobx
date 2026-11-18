@@ -402,8 +402,8 @@ final store = NoteStore(id, storage: notes);
 
 - Opening lists the directory and reads nothing.
 - `read` stays synchronous. A key that was not preloaded or used lately is
-  read from its file there and then, which blocks for that read, a fraction of
-  a millisecond for 100 KB on a phone's flash.
+  read from its file there and then, which blocks for that read (0.7 ms for
+  a 146 KB note in the benchmark, on a Mac; measure on your devices).
 - The last `cacheBytes` (8 MB by default) of encoded values read or written
   stay in memory.
 - A write goes to a temporary file that is renamed over the old one, so a
