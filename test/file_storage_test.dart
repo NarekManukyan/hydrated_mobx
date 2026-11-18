@@ -452,6 +452,26 @@ void main(List<String> args) {
     await disk.close();
   });
 
+  test('evict leaves out keys a queued delete hides', () async {
+    final disk = await build();
+    for (final key in ['a', 'b', 'c']) {
+      await disk.write(key, 1);
+      now = now.add(const Duration(minutes: 5));
+    }
+    // Holds the lock, so evict and the delete behind it both wait.
+    final busy = disk.write('busy', 1);
+    final evicting = disk.evict(
+      maxEntries: 2,
+      where: (key) => key != 'busy',
+    );
+    final deleting = disk.delete('c');
+
+    await Future.wait([busy, deleting]);
+    expect(await evicting, isEmpty);
+    expect(disk.keys.toSet(), {'a', 'b', 'busy'});
+    await disk.close();
+  });
+
   test('a key written just before a clear stays hidden until it is wiped',
       () async {
     final disk = await build();

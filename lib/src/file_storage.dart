@@ -522,14 +522,18 @@ class FileStorage implements UseTimeStorage {
     checkEvictArguments(olderThan: olderThan, maxEntries: maxEntries);
     // Under the lock, so use times queued by [markUsed] land first.
     final doomed = await _locked('evict', () async {
+      // [keys] leaves out the keys a queued delete hides, as
+      // `HydratedStorage.evict` does: they are going anyway, and must not
+      // take a place [maxEntries] keeps.
       final accepted = [
-        for (final key in _keys.toList())
+        for (final key in keys)
           if (!HydratedMobX.isVersionKey(key) && (where?.call(key) ?? true))
             key,
       ];
       await _loadUseTimes(accepted);
       return evictionsAmong(
-        accepted,
+        // A delete may have been queued while the use times loaded.
+        accepted.where((key) => !_pending.hides(key)),
         usedAt: _usedAtOf,
         now: _clock().millisecondsSinceEpoch,
         olderThan: olderThan,
