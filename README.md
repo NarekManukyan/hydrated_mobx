@@ -329,12 +329,19 @@ final evicted = await cache.evict(
   keepLive: true,
   where: (key) => key.startsWith('note_') && !hasUnsyncedEdits(key),
 );
+const attachments = 'attachments_';
 await HydratedMobX.clearAll(
   storage: cache,
   where: (token) =>
-      evicted.contains(token.replaceFirst('attachments_', 'note_')),
+      token.startsWith(attachments) &&
+      evicted.contains('note_${token.substring(attachments.length)}'),
 );
 ```
+
+The second step is best effort: if the app stops between the two calls, the
+attachments of the notes evicted then stay. To catch those too, match
+attachments against the notes still stored instead of against `evicted`
+(`!cache.keys.contains('note_$id')`).
 
 `compactionStrategy` tunes when Hive rewrites the box file.
 

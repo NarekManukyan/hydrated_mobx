@@ -2,16 +2,23 @@
 
 ## Unreleased
 
+### Changed
+
+- `HydratedStorage.evict()` returns `Future<Set<String>>`, the state keys it
+  deleted, instead of `Future<void>`, so state kept beside them under other
+  keys can be deleted too. Callers compile as before, but an override, a
+  fake or a mock of `evict` must now return the set (for mocktail,
+  `thenAnswer((_) async => <String>{})`).
+
 ### Added
 
-- `HydratedStorage.evict()` returns the state keys it deleted, so state kept
-  beside them under other keys can be deleted too.
 - `evict(keepLive: true)` spares the keys of live stores; they do not count
   towards `maxEntries`.
 - `HydratedMobX.liveTokens({storage})` lists the tokens of live stores.
 - `HydratedStorage.build(initialUseTime:)` dates keys that have no use time
   yet from their stored value, so the first eviction after turning tracking
-  on ranks them instead of treating all of them as used at that launch.
+  on ranks them instead of treating all of them as used at that launch. A
+  time after the build counts as the build time.
 - `HydratedMobX.moveTokens(to)` moves stored state to new tokens, with its
   version key, without overwriting anything, and safe to run again after a
   crash.

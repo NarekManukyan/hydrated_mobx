@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:hive_ce/hive.dart';
 // hive_ce does not expose HiveImpl through its public API (the class is marked
@@ -200,7 +201,8 @@ class HydratedStorage implements UseTrackingStorage {
   /// - [initialUseTime] gives keys that have no use time yet (state written
   ///   before tracking was turned on) one from their stored value, e.g. a
   ///   last-opened or created-at field, so the first eviction ranks them by
-  ///   it. Keys it returns `null` for count as used at build.
+  ///   it. Keys it returns `null` for count as used at build, and a time
+  ///   after now counts as now.
   /// - [compactionStrategy] overrides when Hive rewrites the box file.
   static Future<HydratedStorage> build({
     required HydratedStorageDirectory storageDirectory,
@@ -367,8 +369,8 @@ class HydratedStorage implements UseTrackingStorage {
   }
 
   /// Deletes stale state, together with its `.__version` key, and returns
-  /// the state keys it deleted, so state kept beside them under other keys
-  /// can go too.
+  /// a new set of the state keys it deleted, so state kept beside them under
+  /// other keys can go too.
   ///
   /// - [olderThan] drops every key not hydrated or written for that long.
   /// - [maxEntries] then keeps only that many keys, the most recently used.
@@ -399,7 +401,7 @@ class HydratedStorage implements UseTrackingStorage {
     final meta = _meta;
     if (meta == null) {
       _checkOpen('evict');
-      return const {};
+      return <String>{};
     }
     // Let use times already queued by [markUsed] land first, or a key used
     // just now could be judged by its previous use time.
@@ -428,7 +430,7 @@ class HydratedStorage implements UseTrackingStorage {
       ]..sort((a, b) => b.usedAt.compareTo(a.usedAt));
       doomed.addAll(kept.skip(maxEntries).map((c) => c.key));
     }
-    if (doomed.isEmpty) return const {};
+    if (doomed.isEmpty) return doomed;
     // The shared path: suspends live stores of doomed keys and deletes their
     // version keys too.
     await HydratedMobX.clearAll(storage: this, where: doomed.contains);
@@ -449,13 +451,14 @@ class HydratedStorage implements UseTrackingStorage {
     final meta = _meta;
     if (meta == null) return;
     final now = _clock().millisecondsSinceEpoch;
+    // A time in the future would rank the key above every use to come, and
+    // keep [_dueStamp] from recording one until then.
+    int stampOf(DateTime? time) =>
+        time == null ? now : min(time.millisecondsSinceEpoch, now);
     final untracked = {
       for (final key in keys)
         if (!HydratedMobX.isVersionKey(key) && !meta.containsKey(key))
-          key: initialUseTime
-                  ?.call(key, _box.get(key))
-                  ?.millisecondsSinceEpoch ??
-              now,
+          key: stampOf(initialUseTime?.call(key, _box.get(key))),
     };
     if (untracked.isNotEmpty) await meta.putAll(untracked);
   }
