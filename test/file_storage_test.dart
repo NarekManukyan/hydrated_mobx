@@ -472,6 +472,33 @@ void main(List<String> args) {
     await disk.close();
   });
 
+  test('evict leaves out a key whose delete is queued while it ranks',
+      () async {
+    var disk = await build();
+    for (final key in ['a', 'b', 'c']) {
+      await disk.write(key, 1);
+      now = now.add(const Duration(minutes: 5));
+    }
+    await disk.close();
+    // Reopened, so the use times are read from the files (in an isolate).
+    disk = await build();
+    Future<void>? deleting;
+
+    final evicted = await disk.evict(
+      maxEntries: 2,
+      // Runs after the candidates are listed: c is still one of them.
+      where: (key) {
+        if (key == 'a') deleting = disk.delete('c');
+        return true;
+      },
+    );
+    await deleting;
+
+    expect(evicted, isEmpty);
+    expect(disk.keys.toSet(), {'a', 'b'});
+    await disk.close();
+  });
+
   test('a key written just before a clear stays hidden until it is wiped',
       () async {
     final disk = await build();

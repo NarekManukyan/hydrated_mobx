@@ -532,7 +532,8 @@ class FileStorage implements UseTimeStorage {
       ];
       await _loadUseTimes(accepted);
       return evictionsAmong(
-        // A delete may have been queued while the use times loaded.
+        // A delete may have been queued since the candidates were listed,
+        // by [where] or while the use times loaded.
         accepted.where((key) => !_pending.hides(key)),
         usedAt: _usedAtOf,
         now: _clock().millisecondsSinceEpoch,
