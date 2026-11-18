@@ -24,8 +24,9 @@ enum HydratedEncoding {
   gzipJson,
 }
 
-/// Starts every encoded value. `0x89` is not valid UTF-8 or JSON, so plain
-/// bytes an app stores itself are unlikely to begin with it.
+/// Starts every encoded value, followed by a format byte. `0x89` alone is
+/// not rare (every PNG starts with it), so a value counts as encoded only
+/// when it starts with all three magic bytes and a known format byte.
 const _magic = [0x89, 0x48, 0x4d]; // 0x89 'H' 'M'
 
 /// Bytes kept as they are, which only [HydratedValueCodec.file] writes.
