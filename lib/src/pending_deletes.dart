@@ -18,21 +18,23 @@ class PendingDeletes {
   /// Whether [key] is to be treated as deleted already.
   bool hides(String key) => _clears > 0 || _counts.containsKey(key);
 
-  /// Hides [keys] from now until [delete] finishes, however it ends.
-  Future<void> delete(List<String> keys, Future<void> Function() delete) {
+  /// Hides [keys] from now until [body], the storage's delete, finishes,
+  /// however it ends.
+  Future<void> delete(List<String> keys, Future<void> Function() body) {
     for (final key in keys) {
       _counts.update(key, (n) => n + 1, ifAbsent: () => 1);
     }
-    return Future.sync(delete).whenComplete(() {
+    return Future.sync(body).whenComplete(() {
       for (final key in keys) {
         if (_counts.update(key, (n) => n - 1) == 0) _counts.remove(key);
       }
     });
   }
 
-  /// Hides every key from now until [clear] finishes, however it ends.
-  Future<void> clear(Future<void> Function() clear) {
+  /// Hides every key from now until [body], the storage's clear, finishes,
+  /// however it ends.
+  Future<void> clear(Future<void> Function() body) {
     _clears++;
-    return Future.sync(clear).whenComplete(() => _clears--);
+    return Future.sync(body).whenComplete(() => _clears--);
   }
 }
