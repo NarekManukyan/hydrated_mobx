@@ -231,6 +231,14 @@ void main() {
       );
     });
 
+    test('finds keys of minified web builds by shape', () {
+      expect(_at(to, 'minified:Ab', {'currentUser': 1}), 'user');
+      expect(
+        _at(to, 'minified:Qz$_id', {'messages': <Object>[]}),
+        'chat_$_id',
+      );
+    });
+
     test('a short obfuscated name keeps a keyed id whole', () {
       final short = LegacyTokens.match([
         LegacyStore(
