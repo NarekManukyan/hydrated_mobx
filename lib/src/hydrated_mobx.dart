@@ -172,10 +172,13 @@ abstract class HydratedMobX with Store {
   /// state moves with its version key. Returns the moves made, old token to
   /// new.
   ///
-  /// Nothing is overwritten. A move is skipped when:
+  /// No state is overwritten. A move is skipped when:
   /// - the new token already holds different state, or the same state under
   ///   another version;
   /// - two keys would move to the same token;
+  /// - the new token is itself moving away in this run (A to B while B moves
+  ///   to C): B could hold the state A's move expects, and A would be
+  ///   deleted. The next run, with B moved, finishes it;
   /// - a live store uses either token, since it would not see the move.
   ///
   /// A version key left at the new token without its state is replaced.
@@ -234,7 +237,7 @@ abstract class HydratedMobX with Store {
     }
     final moved = <String, String>{};
     for (final MapEntry(key: from, value: next) in planned.entries) {
-      if (clashing.contains(next)) continue;
+      if (clashing.contains(next) || planned.containsKey(next)) continue;
       try {
         final done = await _moveOne(
           source: target,

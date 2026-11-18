@@ -670,7 +670,9 @@ await HydratedMobX.moveTokens(LegacyTokens.match([
 `LegacyTokens.match` finds a key by this build's `'$Type'` when the name
 survived, and otherwise by the shape of its value: a key that looks like a
 class name (plus an id, for a keyed store) whose top-level JSON keys fit
-exactly one store. A name the obfuscator gave to another class never moves one
+exactly one store. A key with no id moves a keyed store's state to its
+prefix alone, which is where that store reads it when built without a
+`storeId`. A name the obfuscator gave to another class never moves one
 listed store's state onto another, because the shape has to fit either way.
 
 Only the listed stores' prefixes are left alone. A current store you did not
