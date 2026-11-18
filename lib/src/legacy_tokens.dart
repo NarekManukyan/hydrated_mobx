@@ -52,10 +52,13 @@ class LegacyStore {
 abstract final class LegacyTokens {
   /// A Dart class name, which is what 1.x keys started with. A minified web
   /// build names a class `minified:Ab`.
-  static final _identifier = RegExp(r'(?:minified:)?[A-Za-z_$][A-Za-z0-9_$]*');
+  static const _className = r'(?:minified:)?[A-Za-z_$][A-Za-z0-9_$]*';
+
+  /// Matches a class name, from where it is asked to.
+  static final _identifier = RegExp(_className);
 
   /// The shortest class name that leaves a valid id after it.
-  static const _shortestIdentifier = r'(?:minified:)?[A-Za-z_$][A-Za-z0-9_$]*?';
+  static const _shortestIdentifier = '$_className?';
 
   /// Returns a `to` for [HydratedMobX.moveTokens] that moves the state of
   /// [stores] off their 1.x keys:
