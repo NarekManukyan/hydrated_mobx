@@ -191,16 +191,41 @@ void main() {
       expect(storage.keys.toSet(), {'new_1', 'old_2', 'new_3', 'new_4'});
     });
 
-    test('rejects a version key as the new token', () {
-      final storage = InMemoryStorage({'old': 1});
+    test('a version key as the new token fails only that key', () async {
+      final storage = InMemoryStorage({'old': 1, 'other': 2});
+      String? to(String token, Object? Function() _) =>
+          token == 'old' ? 'new.__version' : 'moved';
 
-      expect(
-        () => HydratedMobX.moveTokens(
-          (_, __) => 'new.__version',
-          storage: storage,
-        ),
+      final errors = <Object>[];
+      final moved = await HydratedMobX.moveTokens(
+        to,
+        storage: storage,
+        onError: (token, error, _) => errors.add(error),
+      );
+      expect(moved, {'other': 'moved'});
+      expect(errors, [isArgumentError]);
+      expect(storage.keys.toSet(), {'old', 'moved'});
+
+      await expectLater(
+        HydratedMobX.moveTokens(to, storage: storage),
         throwsArgumentError,
       );
+    });
+
+    test('skips live stores bound to the storage a wrapper wraps', () async {
+      final inner = InMemoryStorage({
+        'counterx': {'count': 1},
+      });
+      final store = _Counter(storage: inner, storeId: 'x');
+      addTearDown(store.dispose);
+
+      final moved = await HydratedMobX.moveTokens(
+        (_, __) => 'new',
+        storage: ForwardingStorage(inner),
+      );
+
+      expect(moved, isEmpty);
+      expect(inner.keys, ['counterx']);
     });
   });
 

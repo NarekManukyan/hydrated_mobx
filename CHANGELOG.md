@@ -27,8 +27,8 @@
   on ranks them instead of treating all of them as used at that launch. A
   time after the build counts as the build time.
 - `HydratedMobX.moveTokens(to, {storage, onError})` moves stored state to
-  new tokens, with its version key and use time, without overwriting
-  anything, and safe to run again after a crash. A key that fails to move
+  new tokens, with its version key and use time, without overwriting any
+  state, and safe to run again after a crash. A key that fails to move
   stays put while the rest move.
 - `LegacyTokens.match([LegacyStore(...)])` finds 1.x `runtimeType` keys, by
   type name or, in obfuscated builds, by the shape of the stored JSON, for
@@ -57,10 +57,10 @@
 
 ### Fixed
 
-- `HydratedStorage.read` and `keys` treat a key as gone from the moment a
-  delete or `clear` naming it is queued, so a store built while the delete
-  waits for an earlier write no longer hydrates state that then disappears
-  from disk.
+- `HydratedStorage.read` and `keys` (and `FileStorage`'s) treat a key as
+  gone from the moment a delete or `clear` naming it is queued, so a store
+  built while the delete waits for an earlier write no longer hydrates
+  state that then disappears from disk.
 
 ## [2.0.0] - 2026-10-29
 

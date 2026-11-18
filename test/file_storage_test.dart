@@ -452,6 +452,42 @@ void main(List<String> args) {
     await disk.close();
   });
 
+  test('a markUsed queued behind close leaves the file alone', () async {
+    final disk = await build();
+    await disk.write('a', 1);
+    final file = File('${dir.path}/${files().single}');
+    final written = file.lastModifiedSync();
+    now = now.add(const Duration(days: 1));
+
+    final busy = disk.write('b', 1);
+    final closing = disk.close();
+    disk.markUsed('a');
+    await Future.wait([busy, closing]);
+    await settle();
+
+    expect(file.lastModifiedSync(), written);
+  });
+
+  test('a store built while a delete waits does not hydrate its value',
+      () async {
+    final disk = await build();
+    await disk.write('note_1', {'text': 'old'});
+    // Holds the lock, so the delete clearAll queues waits.
+    final busy = disk.write('busy', 1);
+    final deleting =
+        HydratedMobX.clearAll(storage: disk, where: (t) => t == 'note_1');
+
+    final note = _Note('1', storage: disk);
+    expect(note.text, '');
+    expect(disk.keys, isNot(contains('note_1')));
+
+    await Future.wait([busy, deleting]);
+    await note.flush();
+    expect(disk.read('note_1'), {'text': ''});
+    note.dispose();
+    await disk.close();
+  });
+
   test('closed storage throws', () async {
     final disk = await build();
     await disk.close();
@@ -606,6 +642,27 @@ void main(List<String> args) {
         throwsA(isA<FileSystemException>()),
       );
       expect(disk.keys, contains('note_4'));
+      await disk.close();
+    });
+
+    test('a where that throws for one token fails only that token', () async {
+      final box = InMemoryStorage({
+        'note_1': {'text': 'a'},
+        'note_2': {'text': 'b'},
+      });
+      final disk = await build();
+      final errors = <String>[];
+
+      final moved = await HydratedMobX.transferTokens(
+        from: box,
+        to: disk,
+        where: (token) => token == 'note_2' ? throw StateError('bad') : true,
+        onError: (token, error, _) => errors.add(token),
+      );
+
+      expect(moved, {'note_1'});
+      expect(errors, ['note_2']);
+      expect(box.keys, ['note_2']);
       await disk.close();
     });
 

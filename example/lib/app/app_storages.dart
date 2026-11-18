@@ -11,11 +11,11 @@ const kSessionBox = 'session';
 const kAccountBox = 'account';
 const kRecentBox = 'recent';
 const kVaultBox = 'vault';
-const kDocumentsBox = 'documents';
+const kLargeNotesBox = 'large_notes';
 
 /// The directory, under the storage directory, of the one-file-per-key
 /// storage.
-const kNotesDirectory = 'notes';
+const kLargeNotesDirectory = 'large_notes';
 
 /// The recent-items box keeps at most this many `recent_` entries.
 const kRecentMaxEntries = 5;
@@ -32,8 +32,8 @@ class AppStorages {
     required this.account,
     required this.recent,
     required this.vault,
-    required this.documents,
-    required this.notes,
+    required this.largeNotesBox,
+    required this.largeNotesFiles,
     this.directory,
   });
 
@@ -45,8 +45,8 @@ class AppStorages {
         account: InMemoryStorage(),
         recent: InMemoryStorage(),
         vault: InMemoryStorage(),
-        documents: InMemoryStorage(),
-        notes: InMemoryStorage(),
+        largeNotesBox: InMemoryStorage(),
+        largeNotesFiles: InMemoryStorage(),
       );
 
   /// The directory the Hive boxes live in; null in memory.
@@ -67,16 +67,24 @@ class AppStorages {
   /// AES-256 encrypted.
   final Storage vault;
 
-  /// Large per-note state, kept gzipped in the box rather than decoded.
-  final Storage documents;
+  /// The large notes kept in a box, gzipped rather than decoded.
+  final Storage largeNotesBox;
 
-  /// Large per-note state, one file per key, nothing in memory until read.
-  final Storage notes;
+  /// The large notes kept one file per key, nothing in memory until read.
+  final Storage largeNotesFiles;
 
   static Future<AppStorages> build(String directory) async {
     final dir = HydratedStorageDirectory(directory);
     // Each box has its own build lock, so they open side by side.
-    final (main, session, account, recent, vault, documents, notes) = await (
+    final (
+      main,
+      session,
+      account,
+      recent,
+      vault,
+      largeNotesBox,
+      largeNotesFiles,
+    ) = await (
       HydratedStorage.build(storageDirectory: dir),
       HydratedStorage.build(storageDirectory: dir, boxName: kSessionBox),
       HydratedStorage.build(storageDirectory: dir, boxName: kAccountBox),
@@ -90,12 +98,12 @@ class AppStorages {
       ),
       HydratedStorage.build(
         storageDirectory: dir,
-        boxName: kDocumentsBox,
+        boxName: kLargeNotesBox,
         encoding: HydratedEncoding.gzipJson,
       ),
       FileStorage.build(
         storageDirectory: HydratedStorageDirectory(
-          '$directory/$kNotesDirectory',
+          '$directory/$kLargeNotesDirectory',
         ),
       ),
     ).wait;
@@ -106,8 +114,8 @@ class AppStorages {
       account: account,
       recent: recent,
       vault: vault,
-      documents: documents,
-      notes: notes,
+      largeNotesBox: largeNotesBox,
+      largeNotesFiles: largeNotesFiles,
     );
   }
 
@@ -159,20 +167,20 @@ class AppStorages {
     evictable: (key) => key.startsWith(kRecentPrefix),
   );
 
-  /// The storages in [all] whose values are large, so the inspector lists
-  /// their keys without reading them.
-  static const largeValues = {kDocumentsBox, '$kNotesDirectory (files)'};
-
   /// Every storage by display name, for the inspector. Getters, since the
-  /// recent box is replaced when it is rebuilt.
-  Map<String, Storage Function()> get all => {
-    'main (hydrated_box)': () => main,
-    kSessionBox: () => session,
-    kAccountBox: () => account,
-    kRecentBox: () => recent,
-    kVaultBox: () => vault,
-    kDocumentsBox: () => documents,
-    '$kNotesDirectory (files)': () => notes,
+  /// recent box is replaced when it is rebuilt. A storage of large values
+  /// is listed by key only, without reading them.
+  Map<String, ({Storage Function() storage, bool large})> get all => {
+    'main (hydrated_box)': (storage: () => main, large: false),
+    kSessionBox: (storage: () => session, large: false),
+    kAccountBox: (storage: () => account, large: false),
+    kRecentBox: (storage: () => recent, large: false),
+    kVaultBox: (storage: () => vault, large: false),
+    kLargeNotesBox: (storage: () => largeNotesBox, large: true),
+    '$kLargeNotesDirectory (files)': (
+      storage: () => largeNotesFiles,
+      large: true,
+    ),
   };
 }
 

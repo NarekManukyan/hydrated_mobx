@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:hive_ce/hive.dart';
 // hive_ce does not expose HiveImpl through its public API (the class is marked
@@ -569,10 +568,8 @@ class HydratedStorage implements UseTimeStorage {
     final meta = _meta;
     if (meta == null) return;
     final now = _clock().millisecondsSinceEpoch;
-    // A time in the future would rank the key above every use to come, and
-    // keep [_dueStamp] from recording one until then.
     int stampOf(DateTime? time) =>
-        time == null ? now : min(time.millisecondsSinceEpoch, now);
+        time == null ? now : useTimeAt(time.millisecondsSinceEpoch, now);
     DateTime? timeOf(String key) {
       if (initialUseTime == null) return null;
       try {
@@ -594,12 +591,12 @@ class HydratedStorage implements UseTimeStorage {
 
   /// Whether [key]'s use time is due to be rewritten: it is a state key and
   /// was not recorded within the use resolution.
-  bool _dueStamp(Box<dynamic> meta, String key) {
-    if (HydratedMobX.isVersionKey(key)) return false;
-    final last = _usedAt(meta, key);
-    return last == null ||
-        _clock().millisecondsSinceEpoch - last >= _useResolution.inMilliseconds;
-  }
+  bool _dueStamp(Box<dynamic> meta, String key) => isUseDue(
+        key,
+        last: _usedAt(meta, key),
+        now: _clock().millisecondsSinceEpoch,
+        resolution: _useResolution,
+      );
 
   /// Records [key]'s use time when [_dueStamp]. Caller holds [_lock].
   Future<void> _stamp(String key) async {
@@ -614,7 +611,8 @@ class HydratedStorage implements UseTimeStorage {
   DateTime? usedAt(String key) {
     _checkOpen('read use times');
     final meta = _meta;
-    final used = meta == null ? null : _usedAt(meta, key);
+    if (meta == null || _deleting.containsKey(key)) return null;
+    final used = _usedAt(meta, key);
     return used == null ? null : DateTime.fromMillisecondsSinceEpoch(used);
   }
 
@@ -630,7 +628,7 @@ class HydratedStorage implements UseTimeStorage {
           return;
         }
         final now = _clock().millisecondsSinceEpoch;
-        await meta.put(key, min(time.millisecondsSinceEpoch, now));
+        await meta.put(key, useTimeAt(time.millisecondsSinceEpoch, now));
       });
 
   @override

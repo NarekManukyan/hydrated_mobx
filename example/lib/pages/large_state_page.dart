@@ -22,8 +22,8 @@ class _LargeStatePageState extends State<LargeStatePage> {
   var _busy = false;
   String? _result;
 
-  Storage get _box => appStorages.documents;
-  Storage get _files => appStorages.notes;
+  Storage get _box => appStorages.largeNotesBox;
+  Storage get _files => appStorages.largeNotesFiles;
 
   List<String> _notes(Storage storage) => [
     for (final key in storage.keys)
@@ -66,7 +66,7 @@ class _LargeStatePageState extends State<LargeStatePage> {
       await store.flush();
       store.dispose();
     }
-    return 'Wrote $_kNotesPerTap notes to the "$kDocumentsBox" box, '
+    return 'Wrote $_kNotesPerTap notes to the "$kLargeNotesBox" box, '
         'each kept as gzipped JSON.';
   }
 
@@ -109,9 +109,9 @@ class _LargeStatePageState extends State<LargeStatePage> {
       title: 'Large state',
       explainer:
           'Hive keeps every value of an open box decoded in memory. The '
-          '"$kDocumentsBox" box is built with encoding: gzipJson, so each '
+          '"$kLargeNotesBox" box is built with encoding: gzipJson, so each '
           'note above 16 KB is kept as gzipped bytes and decoded only when a '
-          'store hydrates. The "$kNotesDirectory" FileStorage keeps one file '
+          'store hydrates. The "$kLargeNotesDirectory" FileStorage keeps one file '
           'per note and holds nothing in memory until a note is read. '
           'transferTokens moves notes from the box to the files.',
       children: [

@@ -417,7 +417,9 @@ await notes.preload('note_$id');
 final store = NoteStore(id, storage: notes);
 ```
 
-- Opening lists the directory and reads nothing.
+- Opening lists the directory and reads no file. With `maxAge` or
+  `maxEntries` it also evicts, which reads the modification time of every
+  file `evictable` accepts: one `stat` per file, at each launch.
 - `read` stays synchronous. A key that was not preloaded or used lately is
   read from its file there and then, which blocks for that read (0.6 ms for
   a 146 KB note in the benchmark, on a Mac; measure on your devices).
@@ -435,6 +437,11 @@ final store = NoteStore(id, storage: notes);
   group, say), throws a `StateError` until the first is closed. Isolates of
   one process share its file lock, so a second isolate of the app is not
   caught: keep each directory to one isolate.
+- The storage holds that lock until it is closed. iOS terminates a
+  suspended app that holds a file lock in an app-group container, so a
+  `FileStorage` kept there must be closed when the app goes to the
+  background and built again when it returns. A directory inside the app's
+  own container is not affected.
 - File names are the key in lowercase base32, so keys that differ only in
   case stay apart on macOS and Windows. A state key can be up to 144 bytes
   of UTF-8, which leaves room for its version key.

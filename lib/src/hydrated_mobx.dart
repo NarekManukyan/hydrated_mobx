@@ -179,9 +179,10 @@ abstract class HydratedMobX with Store {
   /// - a live store uses either token, since it would not see the move.
   ///
   /// A version key left at the new token without its state is replaced.
-  /// A key that fails, in [to] or in its move, stays where it is, and the
-  /// others still move. Each failure goes to [onError]; without it, the
-  /// first one is rethrown once every key has been tried.
+  /// A key that fails, in [to] (by throwing or by returning a version key)
+  /// or in its move, stays where it is, and the others still move. Each
+  /// failure goes to [onError]; without it, the first one is rethrown once
+  /// every key has been tried.
   /// When the new token already holds the same state, the old key is
   /// deleted; that is how an interrupted run finishes. Each move writes the
   /// version, then the state, then deletes the old keys, so it is safe to run
@@ -192,7 +193,8 @@ abstract class HydratedMobX with Store {
     void Function(String token, Object error, StackTrace stackTrace)? onError,
   }) async {
     final target = storage ?? HydratedMobX.storage;
-    final live = liveTokens(storage: target);
+    // Unwrapped, so a store bound to the inner storage of a wrapper counts.
+    final live = liveTokens(storage: _unwrapped(target));
     final existing = target.keys.toSet();
     final planned = <String, String>{};
     final targets = <String>{};
@@ -220,7 +222,12 @@ abstract class HydratedMobX with Store {
       }
       if (next == null || next == key || live.contains(next)) continue;
       if (isVersionKey(next)) {
-        throw ArgumentError.value(next, 'to', 'returned a version key');
+        failures.add(
+          key,
+          ArgumentError.value(next, 'to', 'returned a version key'),
+          StackTrace.current,
+        );
+        continue;
       }
       if (!targets.add(next)) clashing.add(next);
       planned[key] = next;
@@ -317,12 +324,14 @@ abstract class HydratedMobX with Store {
   /// Each token is written to [to] (version, then state) before it is
   /// deleted from [from], so a crash leaves it in one storage or both, never
   /// in neither, and running again finishes the move. A token [to] already
-  /// holds with different state stays in [from]; one it holds with the same
-  /// state is only deleted from [from]. Tokens of live stores bound to
+  /// holds with different state, or with the same state under another
+  /// version, stays in [from]; one it holds with the same state and version
+  /// is only deleted from [from]. Tokens of live stores bound to
   /// either storage are skipped. Call it at startup, before constructing the
   /// stores.
   ///
-  /// A token that fails to move stays in [from], and the others still move.
+  /// A token that fails, in [where] or in its move, stays in [from], and the
+  /// others still move.
   /// Each failure goes to [onError]; without it, the first one is rethrown
   /// once every token has been tried.
   ///
@@ -335,27 +344,24 @@ abstract class HydratedMobX with Store {
     required bool Function(String token) where,
     void Function(String token, Object error, StackTrace stackTrace)? onError,
   }) async {
-    Storage unwrapped(Storage storage) => switch (storage) {
-          final ForwardingStorage wrapper => unwrapped(wrapper.inner),
-          _ => storage,
-        };
-    if (identical(unwrapped(from), unwrapped(to))) {
+    if (identical(_unwrapped(from), _unwrapped(to))) {
       throw ArgumentError.value(to, 'to', 'is the same storage as from');
     }
     // Unwrapped, so a store bound to the inner storage of a wrapper counts.
     final live = {
-      ...liveTokens(storage: unwrapped(from)),
-      ...liveTokens(storage: unwrapped(to)),
+      ...liveTokens(storage: _unwrapped(from)),
+      ...liveTokens(storage: _unwrapped(to)),
     };
     final targetKeys = to.keys.toSet();
     final moved = <String>{};
     final failures = _Failures(onError);
     final tokens = [
       for (final key in from.keys)
-        if (!isVersionKey(key) && !live.contains(key) && where(key)) key,
+        if (!isVersionKey(key) && !live.contains(key)) key,
     ];
     for (final token in tokens) {
       try {
+        if (!where(token)) continue;
         final done = await _moveOne(
           source: from,
           from: token,
@@ -372,6 +378,12 @@ abstract class HydratedMobX with Store {
     failures.rethrowFirst();
     return moved;
   }
+
+  /// The storage [storage] writes into, through any [ForwardingStorage]s.
+  static Storage _unwrapped(Storage storage) => switch (storage) {
+        final ForwardingStorage wrapper => _unwrapped(wrapper.inner),
+        _ => storage,
+      };
 
   /// Wipes persisted state from [storage] (the global one by default).
   ///

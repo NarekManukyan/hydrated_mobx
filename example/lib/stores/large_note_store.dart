@@ -2,9 +2,9 @@ import 'package:hydrated_mobx/hydrated_mobx.dart';
 import 'package:mobx/mobx.dart';
 
 /// The token prefix of every large note.
-const kLargeNotePrefix = 'doc_';
+const kLargeNotePrefix = 'large_note_';
 
-/// A note with a long transcript, one key per note (`doc_<id>`). Written
+/// A note with a long transcript, one key per note (`large_note_<id>`). Written
 /// without codegen: an [Observable] read through a getter.
 class LargeNoteStore extends HydratedMobX with Store {
   LargeNoteStore(String id, Storage storage)

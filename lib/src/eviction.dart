@@ -17,6 +17,25 @@ void checkEvictArguments({
   }
 }
 
+/// [time] (ms since epoch) as a use time: never after [now], since a time
+/// in the future would rank its key above every use to come, and keep
+/// [isUseDue] from recording one until then.
+@internal
+int useTimeAt(int time, int now) => time < now ? time : now;
+
+/// Whether the use time of [key], last recorded at [last] (ms since epoch,
+/// `null` if never), is due to be rewritten at [now]: it is a state key and
+/// was not recorded within [resolution].
+@internal
+bool isUseDue(
+  String key, {
+  required int? last,
+  required int now,
+  required Duration resolution,
+}) =>
+    !HydratedMobX.isVersionKey(key) &&
+    (last == null || now - last >= resolution.inMilliseconds);
+
 /// The state keys among [keys] that `evict` deletes, given each one's
 /// [usedAt] (ms since epoch) and the time [now]: those not used for
 /// [olderThan], then all but the [maxEntries] most recently used of the

@@ -17,7 +17,7 @@ class InspectorPage extends StatelessWidget {
           'goes through HydratedMobX.deleteToken, which also removes the '
           "key's version and stops a live store from writing it back.",
       children: [
-        for (final MapEntry(key: name, value: storage)
+        for (final MapEntry(key: name, value: (:storage, :large))
             in appStorages.all.entries)
           Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -25,7 +25,7 @@ class InspectorPage extends StatelessWidget {
               LiveBoxKeys(
                 title: name,
                 storage: storage,
-                showValues: !AppStorages.largeValues.contains(name),
+                showValues: !large,
                 onDelete: (key) => HydratedMobX.deleteToken(
                   HydratedMobX.tokenOfKey(key),
                   storage: storage(),

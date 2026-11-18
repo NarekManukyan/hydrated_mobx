@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:hydrated_mobx/src/eviction.dart';
@@ -44,7 +43,10 @@ import 'package:synchronized/synchronized.dart';
 /// encrypted. One storage at a time may use a directory: a second one, from
 /// this isolate or another process, fails to build. Isolates of one process
 /// share its file lock and do not share statics, so the app must keep a
-/// directory to one isolate. Not available on the web.
+/// directory to one isolate. The lock is held until [close]; iOS terminates
+/// a suspended app that holds a file lock in an app-group container, so
+/// close a storage kept there when the app goes to the background. Not
+/// available on the web.
 /// {@endtemplate}
 class FileStorage implements UseTimeStorage {
   FileStorage._(
@@ -94,8 +96,12 @@ class FileStorage implements UseTimeStorage {
   ///   used first. A value larger than that is never cached.
   /// - [maxAge], [maxEntries] and [evictable] evict as with
   ///   `HydratedStorage.build`, when the storage opens: see [evict].
-  /// - [useResolution]: how often [markUsed] rewrites a file's use time at
-  ///   most.
+  /// - [useResolution]: how often a file's use time is rewritten at most,
+  ///   by a [write] or by [markUsed].
+  ///
+  /// Opening lists the directory and reads no file. With [maxAge] or
+  /// [maxEntries] it also evicts, which reads the modification time of every
+  /// file [evictable] accepts: one `stat` per file, at each launch.
   ///
   /// Throws a [StateError] when another storage, in this isolate or another
   /// process, has the directory open. Another isolate of this process is not
@@ -215,6 +221,10 @@ class FileStorage implements UseTimeStorage {
   final RandomAccessFile _lockFile;
   bool _closed = false;
 
+  /// Keys a queued [deleteAll] or [clear] will remove, with how many queued
+  /// deletes name each; see [_hideWhile].
+  final _deleting = <String, int>{};
+
   static String _nameOf(String key) {
     final bytes = utf8.encode(key);
     // A state key's version key, written beside it, has the longer name,
@@ -324,7 +334,7 @@ class FileStorage implements UseTimeStorage {
   @override
   dynamic read(String key) {
     _checkOpen('read');
-    if (!_keys.contains(key)) return null;
+    if (!_keys.contains(key) || _deleting.containsKey(key)) return null;
     var bytes = _cache.remove(key);
     if (bytes != null) {
       _cache[key] = bytes; // Most recently used now.
@@ -343,7 +353,10 @@ class FileStorage implements UseTimeStorage {
   @override
   Iterable<String> get keys {
     _checkOpen('list keys');
-    return _keys.toList();
+    return [
+      for (final key in _keys)
+        if (!_deleting.containsKey(key)) key,
+    ];
   }
 
   @override
@@ -366,12 +379,12 @@ class FileStorage implements UseTimeStorage {
 
   /// Whether [key] is a state key whose use time was not recorded within
   /// the use resolution.
-  bool _dueStamp(String key) {
-    if (HydratedMobX.isVersionKey(key)) return false;
-    final last = _usedAt[key];
-    return last == null ||
-        _clock().millisecondsSinceEpoch - last >= _useResolution.inMilliseconds;
-  }
+  bool _dueStamp(String key) => isUseDue(
+        key,
+        last: _usedAt[key],
+        now: _clock().millisecondsSinceEpoch,
+        resolution: _useResolution,
+      );
 
   Future<void> _setUsed(String key, File file) async {
     final now = _clock();
@@ -385,7 +398,30 @@ class FileStorage implements UseTimeStorage {
   @override
   Future<void> deleteAll(Iterable<String> keys) {
     final list = keys.toList();
-    return _locked('delete', () => _deleteFiles(list.where(_keys.contains)));
+    return _hideWhile(
+      'delete',
+      list,
+      () => _deleteFiles(list.where(_keys.contains)),
+    );
+  }
+
+  /// Runs [delete] under [_lock] with [keys] hidden from [read] and [keys]
+  /// from now until it finishes, so a store built while the delete waits
+  /// does not hydrate a value that is about to disappear.
+  Future<void> _hideWhile(
+    String operation,
+    List<String> keys,
+    Future<void> Function() delete,
+  ) {
+    _checkOpen(operation);
+    for (final key in keys) {
+      _deleting.update(key, (n) => n + 1, ifAbsent: () => 1);
+    }
+    return _locked(operation, delete).whenComplete(() {
+      for (final key in keys) {
+        if (_deleting.update(key, (n) => n - 1) == 0) _deleting.remove(key);
+      }
+    });
   }
 
   /// Deletes the files of [keys], state keys first: a crash midway then
@@ -416,7 +452,13 @@ class FileStorage implements UseTimeStorage {
     // Suspend the live stores now: a write they queued behind the lock
     // would otherwise land after the wipe.
     HydratedMobX.suspendAll(storage: this);
-    return _locked('clear', () => _deleteFiles(_keys.toList()));
+    // Keys written after this call land after the wipe, so only the ones
+    // stored now are hidden.
+    return _hideWhile(
+      'clear',
+      _keys.toList(),
+      () => _deleteFiles(_keys.toList()),
+    );
   }
 
   @override
@@ -440,7 +482,11 @@ class FileStorage implements UseTimeStorage {
   @override
   DateTime? usedAt(String key) {
     _checkOpen('read use times');
-    if (HydratedMobX.isVersionKey(key) || !_keys.contains(key)) return null;
+    if (HydratedMobX.isVersionKey(key) ||
+        !_keys.contains(key) ||
+        _deleting.containsKey(key)) {
+      return null;
+    }
     return DateTime.fromMillisecondsSinceEpoch(_usedAtOf(key));
   }
 
@@ -450,8 +496,10 @@ class FileStorage implements UseTimeStorage {
   Future<void> setUsedAt(String key, DateTime time) =>
       _locked('set use times', () async {
         if (HydratedMobX.isVersionKey(key) || !_keys.contains(key)) return;
-        final now = _clock().millisecondsSinceEpoch;
-        final at = min(time.millisecondsSinceEpoch, now);
+        final at = useTimeAt(
+          time.millisecondsSinceEpoch,
+          _clock().millisecondsSinceEpoch,
+        );
         await _fileOf(key)
             .setLastModified(DateTime.fromMillisecondsSinceEpoch(at));
         _usedAt[key] = at;
@@ -467,7 +515,8 @@ class FileStorage implements UseTimeStorage {
     // Best effort: a lost use time only makes the key look older.
     unawaited(
       _lock.synchronized(() async {
-        if (_keys.contains(key)) await _setUsed(key, _fileOf(key));
+        // close() may have run while this waited, and released the directory.
+        if (!_closed && _keys.contains(key)) await _setUsed(key, _fileOf(key));
       }).catchError((Object _) {}),
     );
   }
