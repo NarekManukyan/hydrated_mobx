@@ -197,6 +197,10 @@ class HydratedStorage implements UseTrackingStorage {
   ///   setting the same across launches: keys written while it was off look
   ///   as old as their last recorded use. A use time can lag the real use by
   ///   up to [useResolution], so keep it well below [maxAge].
+  /// - [initialUseTime] gives keys that have no use time yet (state written
+  ///   before tracking was turned on) one from their stored value, e.g. a
+  ///   last-opened or created-at field, so the first eviction ranks them by
+  ///   it. Keys it returns `null` for count as used at build.
   /// - [compactionStrategy] overrides when Hive rewrites the box file.
   static Future<HydratedStorage> build({
     required HydratedStorageDirectory storageDirectory,
@@ -207,6 +211,7 @@ class HydratedStorage implements UseTrackingStorage {
     bool Function(String key)? evictable,
     bool trackUse = false,
     Duration useResolution = defaultUseResolution,
+    DateTime? Function(String key, dynamic value)? initialUseTime,
     HydratedCompactionStrategy? compactionStrategy,
     @visibleForTesting DateTime Function() clock = DateTime.now,
   }) {
@@ -249,7 +254,7 @@ class HydratedStorage implements UseTrackingStorage {
         useResolution: useResolution,
       );
       try {
-        await storage._stampUntracked();
+        await storage._stampUntracked(initialUseTime);
         if (maxAge != null || maxEntries != null) {
           await storage.evict(
             olderThan: maxAge,
@@ -361,23 +366,29 @@ class HydratedStorage implements UseTrackingStorage {
     );
   }
 
-  /// Deletes stale state, together with its `.__version` key.
+  /// Deletes stale state, together with its `.__version` key, and returns
+  /// the state keys it deleted, so state kept beside them under other keys
+  /// can go too.
   ///
   /// - [olderThan] drops every key not hydrated or written for that long.
   /// - [maxEntries] then keeps only that many keys, the most recently used.
   /// - [where] limits both to the keys it accepts; other keys are never
   ///   evicted and do not count towards [maxEntries].
+  /// - [keepLive] spares, like [where], the keys of stores that are alive
+  ///   (see [HydratedMobX.liveTokens]), e.g. the one on screen.
   ///
   /// A key's use time has the resolution given to [build]. Keys written before
-  /// eviction metadata existed count as used when the storage was built.
+  /// eviction metadata existed count as used when the storage was built,
+  /// unless `initialUseTime` gave them a time.
   ///
   /// Live stores of evicted keys stop persisting, as with
-  /// [HydratedMobX.clearAll]. Does nothing unless the storage was built to
-  /// track use (`trackUse`, `maxAge` or `maxEntries`).
-  Future<void> evict({
+  /// [HydratedMobX.clearAll]. Does nothing, and returns no keys, unless the
+  /// storage was built to track use (`trackUse`, `maxAge` or `maxEntries`).
+  Future<Set<String>> evict({
     Duration? olderThan,
     int? maxEntries,
     bool Function(String key)? where,
+    bool keepLive = false,
   }) async {
     if (maxEntries != null && maxEntries < 0) {
       throw ArgumentError.value(maxEntries, 'maxEntries', 'must be >= 0');
@@ -388,15 +399,18 @@ class HydratedStorage implements UseTrackingStorage {
     final meta = _meta;
     if (meta == null) {
       _checkOpen('evict');
-      return;
+      return const {};
     }
     // Let use times already queued by [markUsed] land first, or a key used
     // just now could be judged by its previous use time.
     await _locked('evict', () async {});
     final now = _clock().millisecondsSinceEpoch;
+    final live = keepLive ? HydratedMobX.liveTokens(storage: this) : null;
     final candidates = [
       for (final key in keys)
-        if (!HydratedMobX.isVersionKey(key) && (where?.call(key) ?? true))
+        if (!HydratedMobX.isVersionKey(key) &&
+            !(live?.contains(key) ?? false) &&
+            (where?.call(key) ?? true))
           (key: key, usedAt: _usedAt(meta, key) ?? now),
     ];
     final doomed = <String>{};
@@ -414,10 +428,11 @@ class HydratedStorage implements UseTrackingStorage {
       ]..sort((a, b) => b.usedAt.compareTo(a.usedAt));
       doomed.addAll(kept.skip(maxEntries).map((c) => c.key));
     }
-    if (doomed.isEmpty) return;
+    if (doomed.isEmpty) return const {};
     // The shared path: suspends live stores of doomed keys and deletes their
     // version keys too.
     await HydratedMobX.clearAll(storage: this, where: doomed.contains);
+    return doomed;
   }
 
   static int? _usedAt(Box<dynamic> meta, String key) {
@@ -426,14 +441,21 @@ class HydratedStorage implements UseTrackingStorage {
   }
 
   /// Gives every key without a use time one, so state written before
-  /// eviction metadata existed is aged from now rather than evicted at once.
-  Future<void> _stampUntracked() async {
+  /// eviction metadata existed is aged from [initialUseTime], or from now,
+  /// rather than evicted at once.
+  Future<void> _stampUntracked(
+    DateTime? Function(String key, dynamic value)? initialUseTime,
+  ) async {
     final meta = _meta;
     if (meta == null) return;
     final now = _clock().millisecondsSinceEpoch;
     final untracked = {
       for (final key in keys)
-        if (!HydratedMobX.isVersionKey(key) && !meta.containsKey(key)) key: now,
+        if (!HydratedMobX.isVersionKey(key) && !meta.containsKey(key))
+          key: initialUseTime
+                  ?.call(key, _box.get(key))
+                  ?.millisecondsSinceEpoch ??
+              now,
     };
     if (untracked.isNotEmpty) await meta.putAll(untracked);
   }

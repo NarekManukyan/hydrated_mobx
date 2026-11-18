@@ -599,6 +599,7 @@ void main() {
       Duration? maxAge,
       int? maxEntries,
       bool Function(String key)? evictable,
+      DateTime? Function(String key, dynamic value)? initialUseTime,
     }) =>
         HydratedStorage.build(
           storageDirectory: HydratedStorageDirectory(dir.path),
@@ -607,6 +608,7 @@ void main() {
           maxAge: maxAge,
           maxEntries: maxEntries,
           evictable: evictable,
+          initialUseTime: initialUseTime,
           clock: () => now,
         );
 
@@ -717,6 +719,96 @@ void main() {
       await settle();
 
       expect(disk.keys, isEmpty);
+      await disk.close();
+    });
+
+    test('evict() returns the state keys it deleted', () async {
+      final disk = await build();
+      await disk.write('a', 1);
+      await disk.write('a.__version', 2);
+      now = now.add(const Duration(minutes: 5));
+      await disk.write('b', 1);
+      now = now.add(const Duration(minutes: 5));
+      await disk.write('c', 1);
+
+      final evicted = await disk.evict(maxEntries: 1);
+
+      expect(evicted, {'a', 'b'});
+      expect(disk.keys, ['c']);
+      expect(await disk.evict(maxEntries: 1), isEmpty);
+      await disk.close();
+    });
+
+    test('evict() returns no keys when the storage does not track use',
+        () async {
+      final disk = await build(trackUse: false);
+      await disk.write('a', 1);
+
+      expect(await disk.evict(maxEntries: 0), isEmpty);
+      expect(disk.keys, ['a']);
+      await disk.close();
+    });
+
+    test('keepLive spares live stores, which do not count towards the cap',
+        () async {
+      final disk = await build();
+      final open = _Counter(storage: disk, storeId: 'open')..increment();
+      addTearDown(open.dispose);
+      await settle();
+      now = now.add(const Duration(minutes: 5));
+      await disk.write('counterold', {'count': 1});
+      now = now.add(const Duration(minutes: 5));
+      await disk.write('counternew', {'count': 1});
+
+      final evicted = await disk.evict(maxEntries: 1, keepLive: true);
+
+      expect(evicted, {'counterold'});
+      expect(disk.keys.toSet(), {'counteropen', 'counternew'});
+      open.increment();
+      await settle();
+      expect(disk.read('counteropen'), {'count': 2});
+      await disk.close();
+    });
+
+    test('liveTokens lists the stores bound to a storage until disposed',
+        () async {
+      final disk = await build();
+      final other = InMemoryStorage();
+      final a = _Counter(storage: disk, storeId: 'a');
+      final b = _Counter(storage: ForwardingStorage(disk), storeId: 'b');
+      final c = _Counter(storage: other, storeId: 'c');
+      addTearDown(b.dispose);
+      addTearDown(c.dispose);
+
+      expect(HydratedMobX.liveTokens(storage: disk), {'countera', 'counterb'});
+      a.dispose();
+      expect(HydratedMobX.liveTokens(storage: disk), {'counterb'});
+      expect(HydratedMobX.liveTokens(storage: other), {'counterc'});
+      await disk.close();
+    });
+
+    test('initialUseTime ranks keys written before use times were kept',
+        () async {
+      final hive = Hive..init(dir.path);
+      final legacy = await hive.openBox<dynamic>('ranked');
+      for (final (key, day) in [('a', 3), ('b', 1), ('c', 2), ('d', 0)]) {
+        await legacy.put(
+          key,
+          {'openedAt': DateTime(2025, 1, day + 1).toIso8601String()},
+        );
+      }
+      await legacy.put('e', 'no date');
+      await legacy.close();
+
+      final disk = await build(
+        boxName: 'ranked',
+        maxEntries: 3,
+        initialUseTime: (key, value) =>
+            value is Map ? DateTime.parse(value['openedAt'] as String) : null,
+      );
+
+      // e has no time, so it counts as used at build: the newest of all.
+      expect(disk.keys.toSet(), {'a', 'c', 'e'});
       await disk.close();
     });
 

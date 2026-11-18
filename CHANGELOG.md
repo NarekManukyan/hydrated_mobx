@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `HydratedStorage.evict()` returns the state keys it deleted, so state kept
+  beside them under other keys can be deleted too.
+- `evict(keepLive: true)` spares the keys of live stores; they do not count
+  towards `maxEntries`.
+- `HydratedMobX.liveTokens({storage})` lists the tokens of live stores.
+- `HydratedStorage.build(initialUseTime:)` dates keys that have no use time
+  yet from their stored value, so the first eviction after turning tracking
+  on ranks them instead of treating all of them as used at that launch.
+
 ## [2.0.0] - 2026-10-29
 
 See "Migrating from 1.x" in the README for the upgrade steps.

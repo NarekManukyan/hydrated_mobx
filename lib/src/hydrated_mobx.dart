@@ -214,6 +214,11 @@ abstract class HydratedMobX with Store {
   static Future<void> flushAll({Storage? storage}) =>
       Future.wait([for (final store in _live(storage)) store.flush()]);
 
+  /// The [storageToken]s of the live stores bound to [storage] (all stores
+  /// when `null`): constructed and not yet disposed or collected.
+  static Set<String> liveTokens({Storage? storage}) =>
+      {for (final store in _live(storage)) store.storageToken};
+
   /// Moves every live store bound to [from] onto [to], e.g. after closing a
   /// storage and building it again. Their state is not read again; each
   /// store writes its current state to [to] on its next change.

@@ -307,6 +307,35 @@ the first 2.0 launch. Keep the eviction settings the same across launches:
 keys written while use times were not tracked look as old as their last
 recorded use.
 
+`evict` returns the keys it deleted, so state kept beside them under other
+keys can go too. `keepLive: true` spares the stores that are alive, like the
+item on screen; `HydratedMobX.liveTokens(storage: cache)` lists them. A key
+that may only go once some other state is safe, such as an outbox that has
+not synced, belongs in `where`:
+
+```dart
+final cache = await HydratedStorage.build(
+  storageDirectory: directory,
+  boxName: 'cache',
+  trackUse: true,
+  // Rank state saved before use times were kept by a date it carries,
+  // instead of treating all of it as used at this launch.
+  initialUseTime: (key, value) =>
+      value is Map ? DateTime.tryParse('${value['openedAt']}') : null,
+);
+
+final evicted = await cache.evict(
+  maxEntries: 30,
+  keepLive: true,
+  where: (key) => key.startsWith('note_') && !hasUnsyncedEdits(key),
+);
+await HydratedMobX.clearAll(
+  storage: cache,
+  where: (token) =>
+      evicted.contains(token.replaceFirst('attachments_', 'note_')),
+);
+```
+
 `compactionStrategy` tunes when Hive rewrites the box file.
 
 ## Schema versions
