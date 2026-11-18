@@ -384,6 +384,11 @@ class HydratedStorage implements UseTrackingStorage {
         _box.clear(),
         if (_meta case final meta?) meta.clear(),
       ]);
+      // The record went with the rest; values written from now on are kept
+      // in this setting, which a later build must know to convert from.
+      if (_codec.encoding != HydratedEncoding.tree) {
+        await _box.put(_encodingKey, _setting);
+      }
     });
   }
 
@@ -481,21 +486,39 @@ class HydratedStorage implements UseTrackingStorage {
   /// the one they were last converted to, so the memory they take changes
   /// now rather than at their next write.
   Future<void> _encodeStored() async {
-    final setting = _codec.encoding == HydratedEncoding.tree
-        ? HydratedEncoding.tree.name
-        : '${_codec.encoding.name}:${_codec.encodeAbove}';
     final last = _box.get(_encodingKey);
-    if (last == setting) return;
+    if (last == _setting) return;
     // A box never converted holds no encoded values to turn back.
     if (last == null && _codec.encoding == HydratedEncoding.tree) return;
     final converted = <Object, Object?>{};
     for (final key in keys) {
       final stored = _box.get(key);
-      final next = _codec.reencode(stored);
+      final Object? next;
+      try {
+        next = _codec.reencode(stored);
+      } on FormatException {
+        // Left as it is: its store's hydration reports it, as for any value
+        // that does not read, rather than the whole box failing to open.
+        continue;
+      }
       if (!identical(next, stored)) converted[key] = next;
     }
-    converted[_encodingKey] = setting;
+    converted[_encodingKey] = _setting;
     await _box.putAll(converted);
+  }
+
+  /// [_codec]'s setting, as recorded under [_encodingKey].
+  String get _setting => _codec.encoding == HydratedEncoding.tree
+      ? HydratedEncoding.tree.name
+      : '${_codec.encoding.name}:${_codec.encodeAbove}';
+
+  /// [key]'s value for `initialUseTime`, or `null` when it does not read.
+  Object? _readForStamp(String key) {
+    try {
+      return read(key);
+    } on FormatException {
+      return null;
+    }
   }
 
   /// Gives every key without a use time one, so state written before
@@ -514,7 +537,7 @@ class HydratedStorage implements UseTrackingStorage {
     final untracked = {
       for (final key in keys)
         if (!HydratedMobX.isVersionKey(key) && !meta.containsKey(key))
-          key: stampOf(initialUseTime?.call(key, read(key))),
+          key: stampOf(initialUseTime?.call(key, _readForStamp(key))),
     };
     if (untracked.isNotEmpty) await meta.putAll(untracked);
   }
