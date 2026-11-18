@@ -695,6 +695,20 @@ void main(List<String> args) {
     expect(file.lastModifiedSync(), written);
   });
 
+  test('a key a queued delete hides has no use time', () async {
+    final disk = await build();
+    await disk.write('a', 1);
+    expect(disk.usedAt('a'), isNotNull);
+    // Holds the lock, so the delete waits.
+    final busy = disk.write('busy', 1);
+    final deleting = disk.deleteAll(['a']);
+
+    expect(disk.read('a'), isNull);
+    expect(disk.usedAt('a'), isNull);
+    await Future.wait([busy, deleting]);
+    await disk.close();
+  });
+
   test('a store built while a delete waits does not hydrate its value',
       () async {
     final disk = await build();
@@ -787,6 +801,48 @@ void main(List<String> args) {
       expect(moved, {'same'});
       expect(box.keys, ['differs']);
       expect(disk.read('differs'), {'v': 2});
+      await disk.close();
+    });
+
+    test('keeps equal state the target holds under another version', () async {
+      final box = InMemoryStorage({
+        'note_1': {'v': 1},
+        'note_1.__version': 2,
+      });
+      final disk = await build();
+      await disk.write('note_1', {'v': 1});
+      await disk.write('note_1.__version', 3);
+
+      final moved = await HydratedMobX.transferTokens(
+        from: box,
+        to: disk,
+        where: (_) => true,
+      );
+
+      expect(moved, isEmpty);
+      expect(box.keys.toSet(), {'note_1', 'note_1.__version'});
+      expect(disk.read('note_1.__version'), 3);
+      await disk.close();
+    });
+
+    test('skips a token whose file was deleted behind the storage', () async {
+      var disk = await build();
+      final before = files().toSet();
+      await disk.write('note_1', {'text': 'a'});
+      final file = files().toSet().difference(before).single;
+      await disk.close();
+
+      disk = await build();
+      File('${dir.path}/$file').deleteSync();
+      final box = InMemoryStorage();
+      final moved = await HydratedMobX.transferTokens(
+        from: disk,
+        to: box,
+        where: (_) => true,
+      );
+
+      expect(moved, isEmpty);
+      expect(box.keys, isEmpty);
       await disk.close();
     });
 

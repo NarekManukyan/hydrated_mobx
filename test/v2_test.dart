@@ -668,6 +668,19 @@ void main() {
       await disk.close();
     });
 
+    test('a key a queued delete hides has no use time', () async {
+      final disk = await build();
+      await disk.write('a', 1);
+      expect(disk.usedAt('a'), isNotNull);
+      // Holds the lock, so the delete waits.
+      final busy = disk.write('busy', 1);
+      final deleting = disk.deleteAll(['a']);
+
+      expect(disk.usedAt('a'), isNull);
+      await Future.wait([busy, deleting]);
+      await disk.close();
+    });
+
     test('a key written just before a clear stays hidden until it is wiped',
         () async {
       final disk = await build();

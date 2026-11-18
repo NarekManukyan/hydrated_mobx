@@ -627,8 +627,9 @@ the keys it deletes, and only once they are bound to the new storage.
 | trustToJson | Time per write of a 2000-row state, with and without it |
 | Large state | Notes kept gzipped in a box, moved to a `FileStorage` with `transferTokens`, opened with `preload` |
 
-`moveTokens` and `LegacyTokens` run once, at startup, before any screen, so
-they have no screen of their own; their tests show them at work.
+`moveTokens` and `LegacyTokens` are meant to run once, at app startup, before
+any store exists. The example app has no 1.x keys to move, so it does not call
+them; `test/move_tokens_test.dart` shows them at work.
 
 ```sh
 cd example
