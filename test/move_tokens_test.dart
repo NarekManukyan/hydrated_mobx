@@ -142,7 +142,7 @@ void main() {
       expect(storage.read('old'), {'count': 1});
     });
 
-    test('reads only the values to asks for, once each', () async {
+    test('reads only the values to asks for', () async {
       final storage = _CountingStorage(
         InMemoryStorage({
           'old': {'count': 1},
@@ -151,12 +151,14 @@ void main() {
       );
 
       final moved = await HydratedMobX.moveTokens(
-        (token, value) => token == 'old' && value() is Map ? 'new' : null,
+        (token, value) =>
+            token == 'old' && value() is Map && value() != null ? 'new' : null,
         storage: storage,
       );
 
       expect(moved, {'old': 'new'});
-      expect(storage.reads.where((key) => key == 'old'), hasLength(1));
+      // Once for to, however often it asks, and once for the move.
+      expect(storage.reads.where((key) => key == 'old'), hasLength(2));
       expect(storage.reads, isNot(contains('other')));
     });
 
