@@ -6,8 +6,9 @@
 
 - `HydratedStorage.evict()` returns `Future<Set<String>>`, the state keys it
   deleted, instead of `Future<void>`, so state kept beside them under other
-  keys can be deleted too. Callers compile as before, but an override, a
-  fake or a mock of `evict` must now return the set (for mocktail,
+  keys can be deleted too, and takes a new `keepLive` parameter. Callers
+  compile as before, but an override, a fake or a mock of `evict` must now
+  accept `keepLive` and return the set (for mocktail,
   `thenAnswer((_) async => <String>{})`).
 
 ### Added
