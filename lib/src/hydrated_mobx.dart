@@ -508,7 +508,8 @@ abstract class HydratedMobX with Store {
   /// token. A storage shows a write from the moment it is called, but the
   /// stamp is written only once the state has landed, so a store built in
   /// between would read the new state under the old version and migrate it
-  /// again. Kept under the bound storage and every storage it wraps.
+  /// again. Kept under the storage at the bottom of any wrappers, which
+  /// every store writing into it reads through.
   static final _stamping =
       Expando<Map<String, List<({Object json, int version})>>>();
 
@@ -744,9 +745,10 @@ abstract class HydratedMobX with Store {
   }
 
   /// The version [stored] is about to be stamped with, when it is the state
-  /// of a write to [target] whose stamp has not landed yet.
+  /// of a write into [target], or the storage it wraps, whose stamp has not
+  /// landed yet.
   int? _stampingVersion(Storage target, Object stored) {
-    final writes = _stamping[target]?[storageToken];
+    final writes = _stamping[_unwrapped(target)]?[storageToken];
     if (writes == null) return null;
     for (final write in writes.reversed) {
       if (_jsonEquals(write.json, stored)) return write.version;
@@ -759,17 +761,15 @@ abstract class HydratedMobX with Store {
   void Function() _startStamp(Storage target, Map<String, dynamic> json) {
     final write = (json: json as Object, version: version);
     final token = storageToken;
-    final maps = <Map<String, List<({Object json, int version})>>>[];
-    for (Storage? s = target; s != null;) {
-      final byToken = _stamping[s] ??= {};
-      (byToken[token] ??= []).add(write);
-      maps.add(byToken);
-      s = s is ForwardingStorage ? s.inner : null;
-    }
+    final storage = _unwrapped(target);
+    final byToken = _stamping[storage] ??= {};
+    (byToken[token] ??= []).add(write);
     return () {
-      for (final byToken in maps) {
-        final writes = byToken[token]!..remove(write);
-        if (writes.isEmpty) byToken.remove(token);
+      final writes = byToken[token]!..remove(write);
+      if (writes.isNotEmpty) return;
+      byToken.remove(token);
+      if (byToken.isEmpty && identical(_stamping[storage], byToken)) {
+        _stamping[storage] = null;
       }
     };
   }

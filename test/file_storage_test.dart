@@ -750,21 +750,33 @@ void main(List<String> args) {
     await disk.close();
   });
 
-  test(
-      'a stamp still to come through a wrapper counts for the storage it '
-      'wraps', () async {
-    final disk = await build();
-    final first = _Note('1', storage: _NoUseTimes(disk))
-      ..text = 'new'
-      ..dispose();
+  group('a stamp still to come counts through wrappers', () {
+    final cases = <String, (Storage, Storage) Function(FileStorage)>{
+      'written through a wrapper, read directly': (disk) =>
+          (_NoUseTimes(disk), disk),
+      'written directly, read through a wrapper': (disk) =>
+          (disk, _NoUseTimes(disk)),
+      'written and read through two wrappers': (disk) =>
+          (_NoUseTimes(disk), ForwardingStorage(disk)),
+    };
+    for (final MapEntry(key: name, value: bind) in cases.entries) {
+      test(name, () async {
+        final disk = await build();
+        final (writer, reader) = bind(disk);
+        final first = _Note('1', storage: writer)
+          ..text = 'new'
+          ..dispose();
 
-    final second = _Note('1', storage: disk);
-    addTearDown(second.dispose);
-    expect(second.text, 'new');
-    expect(second.migrated, isEmpty);
-    await first.flush();
-    await second.flush();
-    await disk.close();
+        final second = _Note('1', storage: reader);
+        addTearDown(second.dispose);
+        expect(second.text, 'new');
+        expect(second.migrated, isEmpty);
+        await first.flush();
+        await second.flush();
+        expect(disk.read('note_1'), {'text': 'new'});
+        await disk.close();
+      });
+    }
   });
 
   test('reads and keys show writes and deletes from when they are called',
