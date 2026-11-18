@@ -342,6 +342,26 @@ void main() {
     await again.close();
   });
 
+  test('the same directory under another path is refused too', () async {
+    final disk = await build();
+    final links = await Directory.systemTemp.createTemp('hydrated_link_');
+    addTearDown(() => links.delete(recursive: true));
+    final link = Link('${links.path}/files')..createSync(dir.path);
+    final name = dir.uri.pathSegments.lastWhere((s) => s.isNotEmpty);
+    for (final path in [
+      link.path,
+      '${dir.path}/',
+      '${dir.path}/../$name',
+    ]) {
+      await expectLater(
+        FileStorage.build(storageDirectory: HydratedStorageDirectory(path)),
+        throwsStateError,
+        reason: path,
+      );
+    }
+    await disk.close();
+  });
+
   test('another process cannot open the directory while it is open', () async {
     final disk = await build();
     final scripts = await Directory.systemTemp.createTemp('hydrated_lock_');
