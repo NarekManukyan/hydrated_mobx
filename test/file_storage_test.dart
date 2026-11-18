@@ -421,20 +421,14 @@ void main(List<String> args) {
     File('${dir.path}/${files().single}').writeAsStringSync('garbage');
 
     disk = await build();
-    Object? error;
-    final store = _Note(
-      'x',
-      storage: disk,
-    )..hydrate(
-        onHydrationError: (e, _) {
-          error = e;
-          return HydrationErrorBehavior.retain;
-        },
-      );
+    expect(() => disk.read('note_x'), throwsFormatException);
+    final store = _Note('x', storage: disk);
     addTearDown(store.dispose);
 
-    expect(error, isA<FormatException>());
+    // Hydration failed, so the store starts empty and overwrites the file.
     expect(store.text, '');
+    await store.flush();
+    expect(disk.read('note_x'), {'text': ''});
     await disk.close();
   });
 
@@ -709,6 +703,70 @@ void main(List<String> args) {
     await disk.close();
   });
 
+  test('a store rebuilt before the last write lands hydrates that write',
+      () async {
+    final disk = await build();
+    final first = _Note('1', storage: disk)..text = 'v1';
+    await first.flush();
+    first
+      ..text = 'v2'
+      ..dispose(); // Starts the write of v2, which takes a while on disk.
+
+    final second = _Note('1', storage: disk);
+    addTearDown(second.dispose);
+    expect(second.text, 'v2');
+    second.text = 'v2+edit';
+    await second.flush();
+    expect(disk.read('note_1'), {'text': 'v2+edit'});
+    await disk.close();
+  });
+
+  test('reads and keys show writes and deletes from when they are called',
+      () async {
+    final disk = await build();
+    await disk.write('a', 1);
+    // Holds the lock, so everything after it queues.
+    final busy = disk.write('busy', 1);
+
+    final queued = [
+      disk.write('a', 2),
+      disk.write('b', 1),
+    ];
+    expect(disk.read('a'), 2);
+    expect(disk.read('b'), 1);
+    expect(disk.keys.toSet(), {'a', 'b', 'busy'});
+
+    queued.add(disk.deleteAll(['b']));
+    expect(disk.read('b'), isNull);
+    queued.add(disk.write('b', 3));
+    expect(disk.read('b'), 3);
+    queued.add(disk.clear());
+    expect(disk.keys, isEmpty);
+    queued.add(disk.write('c', 1));
+    expect(disk.keys, ['c']);
+
+    await Future.wait([busy, ...queued]);
+    expect(disk.keys, ['c']);
+    expect(disk.read('c'), 1);
+    await disk.close();
+  });
+
+  test('a write that fails reads as the stored value again', () async {
+    final disk = await build();
+    final before = files().toSet();
+    await disk.write('a', 1);
+    final name = files().toSet().difference(before).single;
+    // A directory where the file goes makes the next rename fail.
+    File('${dir.path}/$name').deleteSync();
+    Directory('${dir.path}/$name').createSync();
+
+    final failing = disk.write('a', 2);
+    expect(disk.read('a'), 2);
+    await expectLater(failing, throwsA(isA<FileSystemException>()));
+    expect(disk.read('a'), 1);
+    await disk.close();
+  });
+
   test('a store built while a delete waits does not hydrate its value',
       () async {
     final disk = await build();
@@ -720,7 +778,9 @@ void main(List<String> args) {
 
     final note = _Note('1', storage: disk);
     expect(note.text, '');
-    expect(disk.keys, isNot(contains('note_1')));
+    // The store's first write is queued after the delete, so it is what the
+    // key reads as now.
+    expect(disk.read('note_1'), {'text': ''});
 
     await Future.wait([busy, deleting]);
     await note.flush();

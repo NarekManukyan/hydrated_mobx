@@ -626,6 +626,25 @@ void main() {
       await account.close();
     });
 
+    test('reads and keys show a write queued behind the lock', () async {
+      final disk = await build();
+      await disk.write('a', 1);
+      // Holds the lock, so the writes after it queue.
+      final busy = disk.write('busy', 1);
+      final queued = [disk.write('a', 2), disk.write('b', 1)];
+
+      expect(disk.read('a'), 2);
+      expect(disk.read('b'), 1);
+      expect(disk.keys.toSet(), {'a', 'b', 'busy'});
+      queued.add(disk.deleteAll(['b']));
+      expect(disk.read('b'), isNull);
+
+      await Future.wait([busy, ...queued]);
+      expect(disk.keys.toSet(), {'a', 'busy'});
+      expect(disk.read('a'), 2);
+      await disk.close();
+    });
+
     test('a store built while a delete waits does not hydrate its value',
         () async {
       final disk = await build();
@@ -638,7 +657,9 @@ void main() {
 
       final store = _Counter(storage: disk);
       expect(store.count, 0);
-      expect(disk.keys, isNot(contains('counter')));
+      // The store's first write is queued after the delete, so it is what
+      // the key reads as now.
+      expect(disk.read('counter'), {'count': 0});
       expect(disk.read('other'), 1);
 
       await busy;

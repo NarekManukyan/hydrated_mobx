@@ -8,7 +8,7 @@ import 'package:hydrated_mobx/src/eviction.dart';
 import 'package:hydrated_mobx/src/hydrated_encoding.dart';
 import 'package:hydrated_mobx/src/hydrated_mobx.dart';
 import 'package:hydrated_mobx/src/hydrated_storage.dart';
-import 'package:hydrated_mobx/src/pending_deletes.dart';
+import 'package:hydrated_mobx/src/pending_changes.dart';
 import 'package:meta/meta.dart';
 import 'package:synchronized/synchronized.dart';
 
@@ -229,7 +229,7 @@ class FileStorage implements UseTimeStorage {
 
   /// Keys a queued [deleteAll] or [clear] will remove, which [read] and
   /// [keys] treat as gone already.
-  final _pending = PendingDeletes();
+  final _pending = PendingChanges();
 
   static String _nameOf(String key) {
     final bytes = utf8.encode(key);
@@ -348,6 +348,7 @@ class FileStorage implements UseTimeStorage {
   @override
   dynamic read(String key) {
     _checkOpen('read');
+    if (_pending.shows(key)) return _codec.decode(_pending.stored(key));
     if (!_keys.contains(key) || _pending.hides(key)) return null;
     var bytes = _cache.remove(key);
     if (bytes != null) {
@@ -370,6 +371,8 @@ class FileStorage implements UseTimeStorage {
     return [
       for (final key in _keys)
         if (!_pending.hides(key)) key,
+      for (final key in _pending.written)
+        if (_pending.shows(key) && !_keys.contains(key)) key,
     ];
   }
 
@@ -377,33 +380,39 @@ class FileStorage implements UseTimeStorage {
   Future<void> write(String key, dynamic value) => Future.sync(() {
         _checkOpen('write');
         final bytes = _codec.encode(value)! as Uint8List;
-        return _locked('write', () async {
-          final file = _fileOf(key);
-          final temp = File('${file.path}$_tempExtension');
-          try {
-            await temp.writeAsBytes(bytes, flush: true);
-            await temp.rename(file.path);
-          } catch (_) {
-            // A partial temp file would hold its bytes until the next build,
-            // which on a full disk keeps every later write failing.
-            await temp.delete().then((_) {}, onError: (Object _) {});
-            rethrow;
-          }
-          _keys.add(key);
-          _cachePut(key, bytes);
-          // The rename left the file the time of this write. Its use time is
-          // set as the clock reads it, and at most once per use resolution,
-          // as [markUsed] does. Best effort: the value is written, and a
-          // lost use time only leaves the file the time of the rename.
-          if (_dueStamp(key)) {
-            try {
-              await _setUsed(key, file);
-            } on FileSystemException {
-              // See above.
-            }
-          }
-        });
+        return _pending.write(
+          key,
+          bytes,
+          () => _locked('write', () => _writeFile(key, bytes)),
+        );
       });
+
+  Future<void> _writeFile(String key, Uint8List bytes) async {
+    final file = _fileOf(key);
+    final temp = File('${file.path}$_tempExtension');
+    try {
+      await temp.writeAsBytes(bytes, flush: true);
+      await temp.rename(file.path);
+    } catch (_) {
+      // A partial temp file would hold its bytes until the next build,
+      // which on a full disk keeps every later write failing.
+      await temp.delete().then((_) {}, onError: (Object _) {});
+      rethrow;
+    }
+    _keys.add(key);
+    _cachePut(key, bytes);
+    // The rename left the file the time of this write. Its use time is
+    // set as the clock reads it, and at most once per use resolution,
+    // as [markUsed] does. Best effort: the value is written, and a
+    // lost use time only leaves the file the time of the rename.
+    if (_dueStamp(key)) {
+      try {
+        await _setUsed(key, file);
+      } on FileSystemException {
+        // See above.
+      }
+    }
+  }
 
   /// Whether [key] is a state key whose use time was not recorded within
   /// the use resolution.

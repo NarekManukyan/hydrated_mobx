@@ -562,10 +562,11 @@ To write one from scratch, implement `Storage`: `read`, `write`, `delete`,
 `deleteAll`, `keys`, `clear` and `close`. `read` is synchronous, because stores
 hydrate in their constructor. From `clear`, call
 `HydratedMobX.suspendAll(storage: this)` before wiping, so no store writes its
-state back. If `deleteAll` or `clear` can wait behind other work (a lock, a
-queue), have `read` and `keys` treat a key as gone from the moment a delete or
-clear naming it is called; otherwise a store built in between hydrates state
-that is then deleted under it. Implement `UseTrackingStorage.markUsed` to take
+state back. If `write`, `deleteAll` or `clear` can wait behind other work (a
+lock, a queue), have `read` and `keys` reflect each from the moment it is
+called; otherwise a store built in between hydrates state that is then
+replaced or deleted under it, and its next change overwrites the newer
+state. Implement `UseTrackingStorage.markUsed` to take
 part in eviction, and `UseTimeStorage` (`usedAt`, `setUsedAt`) so that
 `moveTokens` and `transferTokens` keep each key's use time when they move its
 state.

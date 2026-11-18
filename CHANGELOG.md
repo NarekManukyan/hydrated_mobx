@@ -20,11 +20,10 @@ compiles as before.
 - `Storage.deleteAll` no longer promises one operation: a storage that
   cannot do that deletes one key at a time, state keys before their version
   keys.
-- The `Storage` contract asks more of a storage whose `deleteAll` or `clear`
-  can wait behind other work (a lock, a queue): its `read` and `keys` must
-  treat a key as gone from the moment a delete or clear naming it is called.
-  A storage that deletes synchronously, like `InMemoryStorage`, already
-  does.
+- The `Storage` contract asks more of a storage whose `write`, `deleteAll`
+  or `clear` can wait behind other work (a lock, a queue): its `read` and
+  `keys` must reflect each from the moment it is called. A storage that
+  writes and deletes synchronously, like `InMemoryStorage`, already does.
 
 ### Added
 
@@ -66,10 +65,10 @@ compiles as before.
 
 ### Fixed
 
-- `HydratedStorage.read` and `keys` treat a key as gone from the moment a
-  delete or `clear` naming it is queued, so a store built while the delete
-  waits for an earlier write no longer hydrates state that then disappears
-  from disk.
+- `HydratedStorage.read` and `keys` reflect a write, delete or `clear` from
+  the moment it is called, so a store built while it waits for an earlier
+  write no longer hydrates state that is then replaced or deleted, and no
+  longer overwrites the newer state with its next change.
 
 ## [2.0.0] - 2026-10-29
 

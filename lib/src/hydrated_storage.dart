@@ -14,7 +14,7 @@ import 'package:hydrated_mobx/src/gzip/gzip.dart';
 import 'package:hydrated_mobx/src/hydrated_cipher.dart';
 import 'package:hydrated_mobx/src/hydrated_encoding.dart';
 import 'package:hydrated_mobx/src/hydrated_mobx.dart';
-import 'package:hydrated_mobx/src/pending_deletes.dart';
+import 'package:hydrated_mobx/src/pending_changes.dart';
 import 'package:meta/meta.dart';
 import 'package:synchronized/synchronized.dart';
 
@@ -23,11 +23,11 @@ import 'package:synchronized/synchronized.dart';
 /// Implementations must call [HydratedMobX.suspendAll] with themselves from
 /// [clear] before wiping, so no live store writes its state back afterwards.
 ///
-/// A storage whose [deleteAll] or [clear] can wait behind other work (a
-/// lock, a queue) must have [read] and [keys] treat a key as gone from the
-/// moment a delete or clear naming it is called, not when it runs: a store
-/// built in between would otherwise hydrate state that is then deleted
-/// under it.
+/// A storage whose [write], [deleteAll] or [clear] can wait behind other
+/// work (a lock, a queue) must have [read] and [keys] reflect each from the
+/// moment it is called, not when it runs: a store built in between would
+/// otherwise hydrate state that is then replaced or deleted under it, and
+/// its next change would overwrite the newer state.
 abstract class Storage {
   /// Returns the value for [key], or `null` when there is none.
   dynamic read(String key);
@@ -356,7 +356,7 @@ class HydratedStorage implements UseTimeStorage {
 
   /// Keys a queued [deleteAll] or [clear] will remove, which [read] and
   /// [keys] treat as gone already.
-  final _pending = PendingDeletes();
+  final _pending = PendingChanges();
 
   void _checkOpen(String operation) {
     if (!_box.isOpen) throw StorageClosedException(operation);
@@ -379,6 +379,7 @@ class HydratedStorage implements UseTimeStorage {
   @override
   dynamic read(String key) {
     _checkOpen('read');
+    if (_pending.shows(key)) return _codec.decode(_pending.stored(key));
     if (_pending.hides(key)) return null;
     return _codec.decode(_box.get(key));
   }
@@ -387,16 +388,28 @@ class HydratedStorage implements UseTimeStorage {
   Iterable<String> get keys {
     _checkOpen('list keys');
     final keys = _box.keys.whereType<String>();
-    return _pending.isEmpty ? keys : keys.where((key) => !_pending.hides(key));
+    if (_pending.isEmpty) return keys;
+    return [
+      for (final key in keys)
+        if (!_pending.hides(key)) key,
+      for (final key in _pending.written)
+        if (_pending.shows(key) && !_box.containsKey(key)) key,
+    ];
   }
 
   @override
-  Future<void> write(String key, dynamic value) {
-    return _locked(
-      'write',
-      () => Future.wait([_box.put(key, _codec.encode(value)), _stamp(key)]),
-    );
-  }
+  Future<void> write(String key, dynamic value) => Future.sync(() {
+        _checkOpen('write');
+        final stored = _codec.encode(value);
+        return _pending.write(
+          key,
+          stored,
+          () => _locked(
+            'write',
+            () => Future.wait([_box.put(key, stored), _stamp(key)]),
+          ),
+        );
+      });
 
   @override
   Future<void> delete(String key) => deleteAll([key]);
