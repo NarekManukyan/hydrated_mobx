@@ -50,11 +50,12 @@ class LegacyStore {
 /// Finds the new token of state that hydrated_mobx 1.x keyed by
 /// `runtimeType`, for [HydratedMobX.moveTokens].
 abstract final class LegacyTokens {
-  /// A Dart class name, which is what 1.x keys started with.
-  static final _identifier = RegExp(r'[A-Za-z_$][A-Za-z0-9_$]*');
+  /// A Dart class name, which is what 1.x keys started with. A minified web
+  /// build names a class `minified:Ab`.
+  static final _identifier = RegExp(r'(?:minified:)?[A-Za-z_$][A-Za-z0-9_$]*');
 
   /// The shortest class name that leaves a valid id after it.
-  static const _shortestIdentifier = r'[A-Za-z_$][A-Za-z0-9_$]*?';
+  static const _shortestIdentifier = r'(?:minified:)?[A-Za-z_$][A-Za-z0-9_$]*?';
 
   /// Returns a `to` for [HydratedMobX.moveTokens] that moves the state of
   /// [stores] off their 1.x keys:
@@ -69,11 +70,12 @@ abstract final class LegacyTokens {
   /// ```
   ///
   /// Outside obfuscated builds `'$Type'` is the class name the 1.x key was
-  /// made from, and keys are found by it. An obfuscated build renames classes
-  /// whenever the code around them changes, so a key is also matched by
-  /// shape: a key that looks like a class name (followed by an id the
-  /// store's [LegacyStore.idPattern] accepts, for a keyed store) whose value
-  /// has the shape of exactly one store. Where the name could end in
+  /// made from, and keys are found by it. An obfuscated build, or a minified
+  /// web build (`minified:Ab`), renames classes whenever the code around them
+  /// changes, so a key is also matched by shape: a key that looks like a
+  /// class name (followed by an id the store's [LegacyStore.idPattern]
+  /// accepts, for a keyed store) whose value has the shape of exactly one
+  /// store. Where the name could end in
   /// characters the id also accepts, the longest such id is taken: with
   /// `RegExp(r'\d+')`, `Qz123` is id `123`.
   ///
