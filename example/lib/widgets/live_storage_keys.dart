@@ -10,8 +10,8 @@ const _kRefresh = Duration(milliseconds: 500);
 /// The keys a storage holds, and their values unless [showValues] is off,
 /// re-read twice a second so writes, deletes and evictions show up as they
 /// happen.
-class LiveBoxKeys extends StatefulWidget {
-  const LiveBoxKeys({
+class LiveStorageKeys extends StatefulWidget {
+  const LiveStorageKeys({
     super.key,
     required this.title,
     required this.storage,
@@ -33,10 +33,10 @@ class LiveBoxKeys extends StatefulWidget {
   final bool showValues;
 
   @override
-  State<LiveBoxKeys> createState() => _LiveBoxKeysState();
+  State<LiveStorageKeys> createState() => _LiveStorageKeysState();
 }
 
-class _LiveBoxKeysState extends State<LiveBoxKeys> {
+class _LiveStorageKeysState extends State<LiveStorageKeys> {
   late final Timer _timer;
 
   @override

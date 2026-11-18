@@ -3,7 +3,7 @@ import 'package:hydrated_mobx/hydrated_mobx.dart';
 
 import '../app/app_storages.dart';
 import '../widgets/demo_page.dart';
-import '../widgets/live_box_keys.dart';
+import '../widgets/live_storage_keys.dart';
 
 class InspectorPage extends StatelessWidget {
   const InspectorPage({super.key});
@@ -23,7 +23,7 @@ class InspectorPage extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              LiveBoxKeys(
+              LiveStorageKeys(
                 title: name,
                 storage: storage,
                 showValues: !large,

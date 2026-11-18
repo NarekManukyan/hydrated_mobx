@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../app/app_storages.dart';
 import '../stores/recent_stores.dart';
 import '../widgets/demo_page.dart';
-import '../widgets/live_box_keys.dart';
+import '../widgets/live_storage_keys.dart';
 
 const _kItemCount = 10;
 
@@ -102,7 +102,7 @@ class _EvictionPageState extends State<EvictionPage> {
           label: Text(_rebuilding ? 'Rebuilding…' : 'Rebuild storage (evict)'),
         ),
         const SizedBox(height: 16),
-        LiveBoxKeys(
+        LiveStorageKeys(
           title: '"$kRecentBox" box',
           storage: () => appStorages.recent,
         ),
