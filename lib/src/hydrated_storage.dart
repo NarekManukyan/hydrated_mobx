@@ -20,6 +20,12 @@ import 'package:synchronized/synchronized.dart';
 ///
 /// Implementations must call [HydratedMobX.suspendAll] with themselves from
 /// [clear] before wiping, so no live store writes its state back afterwards.
+///
+/// A storage whose [deleteAll] or [clear] can wait behind other work (a
+/// lock, a queue) must have [read] and [keys] treat a key as gone from the
+/// moment a delete or clear naming it is called, not when it runs: a store
+/// built in between would otherwise hydrate state that is then deleted
+/// under it.
 abstract class Storage {
   /// Returns the value for [key], or `null` when there is none.
   dynamic read(String key);
