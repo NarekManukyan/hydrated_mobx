@@ -41,6 +41,17 @@ class _CountingStorage extends ForwardingStorage {
   }
 }
 
+/// Lists keys whose values read as gone, like a file deleted behind a
+/// storage's back.
+class _VanishingStorage extends ForwardingStorage {
+  _VanishingStorage(super.inner, this.gone);
+
+  final Set<String> gone;
+
+  @override
+  dynamic read(String key) => gone.contains(key) ? null : super.read(key);
+}
+
 void main() {
   group('moveTokens', () {
     test('moves state with its version key and returns the moves', () async {
@@ -93,6 +104,43 @@ void main() {
 
       expect(moved, {'old': 'new'});
       expect(storage.keys.toSet(), {'new', 'new.__version'});
+    });
+
+    test('keeps equal state the new token holds under another version',
+        () async {
+      final storage = InMemoryStorage({
+        'old': {'count': 1},
+        'old.__version': 2,
+        'new': {'count': 1},
+        'new.__version': 3,
+      });
+
+      final moved = await HydratedMobX.moveTokens(
+        (token, _) => token == 'old' ? 'new' : null,
+        storage: storage,
+      );
+
+      expect(moved, isEmpty);
+      expect(
+        storage.keys.toSet(),
+        {'old', 'old.__version', 'new', 'new.__version'},
+      );
+    });
+
+    test('skips a listed key whose value reads as gone', () async {
+      final inner = InMemoryStorage({
+        'old': {'count': 1},
+        'old.__version': 2,
+      });
+      final storage = _VanishingStorage(inner, {'old'});
+
+      final moved = await HydratedMobX.moveTokens(
+        (token, _) => token == 'old' ? 'new' : null,
+        storage: storage,
+      );
+
+      expect(moved, isEmpty);
+      expect(inner.keys.toSet(), {'old', 'old.__version'});
     });
 
     test('drops a stale version key of the new token', () async {
