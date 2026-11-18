@@ -75,9 +75,8 @@ abstract final class LegacyTokens {
   /// changes, so a key is also matched by shape: a key that looks like a
   /// class name (followed by an id the store's [LegacyStore.idPattern]
   /// accepts, for a keyed store) whose value has the shape of exactly one
-  /// store. Where the name could end in
-  /// characters the id also accepts, the longest such id is taken: with
-  /// `RegExp(r'\d+')`, `Qz123` is id `123`.
+  /// store. Where the name could end in characters the id also accepts, the
+  /// longest such id is taken: with `RegExp(r'\d+')`, `Qz123` is id `123`.
   ///
   /// Both ways require the value to have the store's shape, and for a keyed
   /// store the rest of the key to be an id [LegacyStore.idPattern] accepts,
