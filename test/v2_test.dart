@@ -626,6 +626,48 @@ void main() {
       await account.close();
     });
 
+    test('a store built while a delete waits does not hydrate its value',
+        () async {
+      final disk = await build();
+      await disk.write('counter', {'count': 5});
+      await disk.write('other', 1);
+      // Holds the lock, so the delete that evict and clearAll queue waits.
+      final busy = disk.write('busy', 1);
+      final deleting =
+          HydratedMobX.clearAll(storage: disk, where: (t) => t == 'counter');
+
+      final store = _Counter(storage: disk);
+      expect(store.count, 0);
+      expect(disk.keys, isNot(contains('counter')));
+      expect(disk.read('other'), 1);
+
+      await busy;
+      await deleting;
+      // The store's own state, not a hole where it was deleted.
+      await store.flush();
+      expect(disk.read('counter'), {'count': 0});
+      store.dispose();
+      await disk.close();
+    });
+
+    test('a key cleared or deleted while queued reads as gone', () async {
+      final disk = await build();
+      await disk.write('a', 1);
+      await disk.write('b', 2);
+
+      final deleting = disk.deleteAll(['a']);
+      expect(disk.read('a'), isNull);
+      expect(disk.keys, ['b']);
+      final clearing = disk.clear();
+      expect(disk.read('b'), isNull);
+      final writing = disk.write('c', 3);
+      await Future.wait([deleting, clearing, writing]);
+
+      expect(disk.keys, ['c']);
+      expect(disk.read('c'), 3);
+      await disk.close();
+    });
+
     test('keys and deleteAll', () async {
       final disk = await build();
       await disk.write('a', 1);

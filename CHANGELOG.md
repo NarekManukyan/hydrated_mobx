@@ -35,6 +35,13 @@
   back to `tree` too. Versions before 2.1 cannot read an encoded box.
 - `benchmark/memory_benchmark.dart`.
 
+### Fixed
+
+- `HydratedStorage.read` and `keys` treat a key as gone from the moment a
+  delete or `clear` naming it is queued, so a store built while the delete
+  waits for an earlier write no longer hydrates state that then disappears
+  from disk.
+
 ## [2.0.0] - 2026-10-29
 
 See "Migrating from 1.x" in the README for the upgrade steps.
