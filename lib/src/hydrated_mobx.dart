@@ -141,8 +141,12 @@ abstract class HydratedMobX with Store {
     Storage? storage,
   }) async {
     final target = storage ?? HydratedMobX.storage;
+    // From the keys, not by reading each value: a read decodes it, and one
+    // that does not decode would stop the import, even one meant to
+    // overwrite it.
+    final present = target.keys.toSet();
     for (final entry in data.entries) {
-      final existing = target.read(entry.key) != null;
+      final existing = present.contains(entry.key);
       if (!overwrite && existing) continue;
       // Old state goes, then the version, then the new state: an interruption
       // leaves nothing to hydrate, which is harmless, never state under a
