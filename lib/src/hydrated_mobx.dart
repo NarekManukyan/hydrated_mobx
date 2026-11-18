@@ -263,7 +263,7 @@ abstract class HydratedMobX with Store {
   /// [target], with its version key and use time, and returns whether it
   /// did. [exists] says whether [target] holds [to] already; then only the
   /// same state under the same version counts as moved, and is deleted from
-  /// [source].
+  /// [source]. A [value] of `null` is nothing to move.
   ///
   /// Writes the version, then the state, then deletes [from], so a crash
   /// leaves the state in one place or both, and running again finishes. A
@@ -276,6 +276,8 @@ abstract class HydratedMobX with Store {
     required String to,
     required bool exists,
   }) async {
+    // Gone since the keys were listed: deleted, or behind a queued delete.
+    if (value == null) return false;
     final fromVersion = versionKeyOf(from);
     final toVersion = versionKeyOf(to);
     final version = source.read(fromVersion);
