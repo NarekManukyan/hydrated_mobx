@@ -32,7 +32,10 @@ abstract class Storage {
   /// Deletes the value for [key].
   Future<void> delete(String key);
 
-  /// Deletes the values for every key in [keys] in one operation.
+  /// Deletes the values for every key in [keys]: in one operation where the
+  /// storage can do that (as `HydratedStorage` does), otherwise one key at a
+  /// time with every state key before its version key, so an interruption
+  /// never leaves state without its version.
   Future<void> deleteAll(Iterable<String> keys);
 
   /// Every key currently stored, including the `.__version` keys
@@ -266,9 +269,11 @@ class HydratedStorage implements UseTimeStorage {
     if (encodeAbove < 0) {
       throw ArgumentError.value(encodeAbove, 'encodeAbove', 'must be >= 0');
     }
-    if (maxAge != null && maxAge.isNegative) {
-      throw ArgumentError.value(maxAge, 'maxAge', 'must not be negative');
-    }
+    checkEvictArguments(
+      olderThan: maxAge,
+      maxEntries: maxEntries,
+      olderThanName: 'maxAge',
+    );
     if (boxName.endsWith(_metaBoxSuffix)) {
       throw ArgumentError.value(
         boxName,

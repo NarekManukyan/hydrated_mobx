@@ -28,8 +28,9 @@ The screens come from the [example app](example), one per feature area.
   written, and neither is the state a store just hydrated.
 - **Several storages:** one Hive box per namespace (session, account, cache),
   each store bound to the one it belongs in.
-- **Targeted clearing:** `clearAll(where:)` deletes only the tokens you name, in
-  one operation, and stops their stores first.
+- **Targeted clearing:** `clearAll(where:)` deletes only the tokens you name,
+  in one `deleteAll` (one Hive operation for a `HydratedStorage`), and stops
+  their stores first.
 - **Memory:** `encoding: HydratedEncoding.gzipJson` keeps large state as
   bytes, not decoded trees, until a store hydrates it; `FileStorage` keeps
   per-id state on disk until it is used.
@@ -427,8 +428,10 @@ final store = NoteStore(id, storage: notes);
   using each file's modification time as its use time.
 - Files are not encrypted. Keep secrets in an encrypted `HydratedStorage`.
 - One storage at a time may have a directory open. A second `build` on it,
-  from this process or another one (an app extension sharing an app group,
-  say), throws a `StateError` until the first is closed.
+  from the same isolate or another process (an app extension sharing an app
+  group, say), throws a `StateError` until the first is closed. Isolates of
+  one process share its file lock, so a second isolate of the app is not
+  caught: keep each directory to one isolate.
 - File names are the key in lowercase base32, so keys that differ only in
   case stay apart on macOS and Windows. A state key can be up to 144 bytes
   of UTF-8, which leaves room for its version key.
@@ -543,7 +546,9 @@ To write one from scratch, implement `Storage`: `read`, `write`, `delete`,
 `deleteAll`, `keys`, `clear` and `close`. `read` is synchronous, because stores
 hydrate in their constructor. From `clear`, call
 `HydratedMobX.suspendAll(storage: this)` before wiping, so no store writes its
-state back. Implement `UseTrackingStorage.markUsed` to take part in eviction.
+state back. Implement `UseTrackingStorage.markUsed` to take part in eviction,
+and `UseTimeStorage` (`usedAt`, `setUsedAt`) so that `moveTokens` and
+`transferTokens` keep each key's use time when they move its state.
 
 ### Rebuilding a storage
 
@@ -670,8 +675,10 @@ await HydratedMobX.moveTokens(
 ```
 
 It moves the version key along, never overwrites different state, skips
-tokens of live stores, and can run again after a crash. It returns the moves
-it made.
+tokens of live stores, and can run again after a crash. A key that fails to
+move stays where it is while the others move; pass `onError` to hear about
+it, or the first failure is rethrown at the end. It returns the moves it
+made.
 
 ## More
 

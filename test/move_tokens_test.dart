@@ -162,6 +162,36 @@ void main() {
       expect(storage.reads, isNot(contains('other')));
     });
 
+    test('a key that fails stays, the rest move, and the error is reported',
+        () async {
+      final storage = InMemoryStorage({
+        'old_1': {'count': 1},
+        'old_2': {'count': 2},
+        'old_3': {'count': 3},
+      });
+      String? to(String token, Object? Function() value) {
+        if (token == 'old_2') throw const FormatException('unreadable');
+        return token.startsWith('old_') ? 'new_${token.substring(4)}' : null;
+      }
+
+      final errors = <String>[];
+      final moved = await HydratedMobX.moveTokens(
+        to,
+        storage: storage,
+        onError: (token, _, __) => errors.add(token),
+      );
+      expect(moved, {'old_1': 'new_1', 'old_3': 'new_3'});
+      expect(errors, ['old_2']);
+
+      // Without onError the first failure is rethrown, after the others.
+      await storage.write('old_4', {'count': 4});
+      await expectLater(
+        HydratedMobX.moveTokens(to, storage: storage),
+        throwsFormatException,
+      );
+      expect(storage.keys.toSet(), {'new_1', 'old_2', 'new_3', 'new_4'});
+    });
+
     test('rejects a version key as the new token', () {
       final storage = InMemoryStorage({'old': 1});
 

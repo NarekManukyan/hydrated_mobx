@@ -10,6 +10,12 @@
   compile as before, but an override, a fake or a mock of `evict` must now
   accept `keepLive` and return the set (for mocktail,
   `thenAnswer((_) async => <String>{})`).
+- `HydratedStorage` and `ForwardingStorage` implement the new
+  `UseTimeStorage`, so a hand-written fake that `implements` either one must
+  add `usedAt` and `setUsedAt`. Subclasses inherit them.
+- `Storage.deleteAll` no longer promises one operation: a storage that
+  cannot do that deletes one key at a time, state keys before their version
+  keys.
 
 ### Added
 
@@ -20,9 +26,10 @@
   yet from their stored value, so the first eviction after turning tracking
   on ranks them instead of treating all of them as used at that launch. A
   time after the build counts as the build time.
-- `HydratedMobX.moveTokens(to)` moves stored state to new tokens, with its
-  version key, without overwriting anything, and safe to run again after a
-  crash.
+- `HydratedMobX.moveTokens(to, {storage, onError})` moves stored state to
+  new tokens, with its version key and use time, without overwriting
+  anything, and safe to run again after a crash. A key that fails to move
+  stays put while the rest move.
 - `LegacyTokens.match([LegacyStore(...)])` finds 1.x `runtimeType` keys, by
   type name or, in obfuscated builds, by the shape of the stored JSON, for
   `moveTokens`.
@@ -36,8 +43,8 @@
 - `FileStorage` (`package:hydrated_mobx/file_storage.dart`): one file per
   key, nothing in memory until read, with `preload`, a bounded cache of
   recent values, atomic writes and the same eviction as `HydratedStorage`.
-  One storage per directory at a time, across processes. Files are not
-  encrypted. Not available on the web.
+  One storage per directory at a time, per isolate and across processes.
+  Files are not encrypted. Not available on the web.
 - `HydratedMobX.transferTokens(from:, to:, where:, onError:)` moves state
   between storages, writing before deleting. A token that fails to move
   stays put while the rest move. The same storage on both sides, wrapped or

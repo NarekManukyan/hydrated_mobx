@@ -159,6 +159,10 @@ class AppStorages {
     evictable: (key) => key.startsWith(kRecentPrefix),
   );
 
+  /// The storages in [all] whose values are large, so the inspector lists
+  /// their keys without reading them.
+  static const largeValues = {kDocumentsBox, '$kNotesDirectory (files)'};
+
   /// Every storage by display name, for the inspector. Getters, since the
   /// recent box is replaced when it is rebuilt.
   Map<String, Storage Function()> get all => {

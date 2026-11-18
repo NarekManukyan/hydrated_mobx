@@ -8,8 +8,10 @@
 //     ENCODING=$e dart run --enable-vm-service=0 \
 //       --disable-service-auth-codes benchmark/memory_benchmark.dart
 //   done
-// STORAGE=file measures a FileStorage instead (json or gzipJson), reading
-// every note from disk.
+// STORAGE=file measures a FileStorage instead, reading every note from disk.
+// Its ENCODING is json or gzipJson (the default for files):
+//   STORAGE=file dart run --enable-vm-service=0 \
+//     --disable-service-auth-codes benchmark/memory_benchmark.dart
 // ignore_for_file: avoid_print
 
 import 'dart:async';
@@ -101,13 +103,15 @@ class _Vm {
 }
 
 Future<void> main() async {
+  final files = Platform.environment['STORAGE'] == 'file';
+  // A file holds bytes, so tree is not an encoding a FileStorage takes.
   final encoding = HydratedEncoding.values.byName(
-    Platform.environment['ENCODING'] ?? HydratedEncoding.tree.name,
+    Platform.environment['ENCODING'] ??
+        (files ? HydratedEncoding.gzipJson : HydratedEncoding.tree).name,
   );
   final dir = await Directory.systemTemp.createTemp('hydrated_memory_');
   final directory = HydratedStorageDirectory(dir.path);
   final vm = await _Vm.connect();
-  final files = Platform.environment['STORAGE'] == 'file';
   Future<Storage> open() => files
       ? FileStorage.build(
           storageDirectory: directory,

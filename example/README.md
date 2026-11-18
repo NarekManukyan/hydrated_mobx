@@ -1,6 +1,6 @@
 # HydratedMobX example
 
-A Flutter app with one screen per `hydrated_mobx` feature:
+A Flutter app with one screen per `hydrated_mobx` feature area:
 
 | Screen | Shows |
 | --- | --- |
@@ -14,6 +14,10 @@ A Flutter app with one screen per `hydrated_mobx` feature:
 | Storage inspector | Every key in every box, with delete and clear |
 | Encryption | An AES-256 box; the note is not in the file as plain text |
 | trustToJson | Time per write of a 2000-row state, with and without it |
+| Large state | Notes kept gzipped in a box, moved to a `FileStorage` with `transferTokens`, opened with `preload` |
+
+`moveTokens` and `LegacyTokens` run once, at startup, before any screen, so
+they have no screen of their own; their tests show them at work.
 
 ## Run it
 

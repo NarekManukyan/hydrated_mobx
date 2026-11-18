@@ -254,6 +254,63 @@ void main(List<String> args) {
     await disk.close();
   });
 
+  test('a failed delete keeps the key listed, so a retry reaches it', () async {
+    final disk = await build();
+    await disk.write('doc.__version', 2);
+    final version = files().single;
+    await disk.write('doc', {'v': 1});
+    File('${dir.path}/$version').deleteSync();
+    Directory('${dir.path}/$version').createSync();
+
+    await expectLater(
+      disk.clear(),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(disk.keys, ['doc.__version']);
+
+    Directory('${dir.path}/$version').deleteSync();
+    await disk.clear();
+    expect(disk.keys, isEmpty);
+    await disk.close();
+  });
+
+  test('build removes only its own unfinished writes', () async {
+    var disk = await build();
+    await disk.write('doc', {'v': 1});
+    await disk.close();
+    final own = '${files().single}.tmp';
+    File('${dir.path}/$own').writeAsBytesSync([1]);
+    File('${dir.path}/other.tmp').writeAsBytesSync([1]);
+
+    disk = await build();
+    expect(files(), isNot(contains(own)));
+    expect(files(), contains('other.tmp'));
+    await disk.close();
+  });
+
+  test('a write within the use resolution keeps the recorded use time',
+      () async {
+    final disk = await build();
+    await disk.write('a', 1);
+    final first = now;
+    now = now.add(const Duration(seconds: 10));
+    await disk.write('a', 2);
+    expect(disk.usedAt('a'), first);
+    now = now.add(const Duration(minutes: 1));
+    await disk.write('a', 3);
+    expect(disk.usedAt('a'), now);
+    await disk.close();
+  });
+
+  test('a negative maxAge is reported under its own name', () async {
+    await expectLater(
+      build(maxAge: const Duration(days: -1)),
+      throwsA(
+        isA<ArgumentError>().having((e) => e.name, 'name', 'maxAge'),
+      ),
+    );
+  });
+
   test('a write that never finished leaves the old value', () async {
     var disk = await build();
     await disk.write('doc', {'v': 1});
@@ -549,6 +606,52 @@ void main(List<String> args) {
         throwsA(isA<FileSystemException>()),
       );
       expect(disk.keys, contains('note_4'));
+      await disk.close();
+    });
+
+    test('skips live stores bound to the storage a wrapper wraps', () async {
+      final box = InMemoryStorage({
+        'note_1': {'text': 'a'},
+      });
+      final store = _Note('1', storage: box);
+      addTearDown(store.dispose);
+      final disk = await build();
+
+      final moved = await HydratedMobX.transferTokens(
+        from: ForwardingStorage(box),
+        to: disk,
+        where: (_) => true,
+      );
+
+      expect(moved, isEmpty);
+      expect(box.keys, contains('note_1'));
+      expect(disk.keys, isEmpty);
+      await disk.close();
+    });
+
+    test('a move finished after a crash keeps the use time', () async {
+      final boxDir = await Directory.systemTemp.createTemp('hydrated_box_');
+      addTearDown(() => boxDir.delete(recursive: true));
+      final box = await HydratedStorage.build(
+        storageDirectory: HydratedStorageDirectory(boxDir.path),
+        trackUse: true,
+        clock: () => now,
+      );
+      await box.write('note_1', {'text': 'a'});
+      now = now.add(const Duration(days: 3));
+      // The crashed run wrote the state, but not its use time.
+      final disk = await build();
+      await disk.write('note_1', {'text': 'a'});
+
+      final moved = await HydratedMobX.transferTokens(
+        from: box,
+        to: disk,
+        where: (_) => true,
+      );
+
+      expect(moved, {'note_1'});
+      expect(disk.usedAt('note_1'), DateTime(2026));
+      await box.close();
       await disk.close();
     });
 

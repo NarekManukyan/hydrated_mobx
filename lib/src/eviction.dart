@@ -1,14 +1,19 @@
 import 'package:hydrated_mobx/src/hydrated_mobx.dart';
 import 'package:meta/meta.dart';
 
-/// Throws for `evict` arguments no storage accepts.
+/// Throws for `evict` arguments no storage accepts. [olderThanName] names
+/// [olderThan] in the error, for a caller that calls it something else.
 @internal
-void checkEvictArguments({Duration? olderThan, int? maxEntries}) {
+void checkEvictArguments({
+  Duration? olderThan,
+  int? maxEntries,
+  String olderThanName = 'olderThan',
+}) {
   if (maxEntries != null && maxEntries < 0) {
     throw ArgumentError.value(maxEntries, 'maxEntries', 'must be >= 0');
   }
   if (olderThan != null && olderThan.isNegative) {
-    throw ArgumentError.value(olderThan, 'olderThan', 'must not be negative');
+    throw ArgumentError.value(olderThan, olderThanName, 'must not be negative');
   }
 }
 

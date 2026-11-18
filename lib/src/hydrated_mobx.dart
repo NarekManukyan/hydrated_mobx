@@ -179,6 +179,9 @@ abstract class HydratedMobX with Store {
   /// - a live store uses either token, since it would not see the move.
   ///
   /// A version key left at the new token without its state is replaced.
+  /// A key that fails, in [to] or in its move, stays where it is, and the
+  /// others still move. Each failure goes to [onError]; without it, the
+  /// first one is rethrown once every key has been tried.
   /// When the new token already holds the same state, the old key is
   /// deleted; that is how an interrupted run finishes. Each move writes the
   /// version, then the state, then deletes the old keys, so it is safe to run
@@ -186,6 +189,7 @@ abstract class HydratedMobX with Store {
   static Future<Map<String, String>> moveTokens(
     String? Function(String token, Object? Function() value) to, {
     Storage? storage,
+    void Function(String token, Object error, StackTrace stackTrace)? onError,
   }) async {
     final target = storage ?? HydratedMobX.storage;
     final live = liveTokens(storage: target);
@@ -193,6 +197,7 @@ abstract class HydratedMobX with Store {
     final planned = <String, String>{};
     final targets = <String>{};
     final clashing = <String>{};
+    final failures = _Failures(onError);
     for (final key in existing) {
       if (isVersionKey(key) || live.contains(key)) continue;
       // Read at most once per call of [to], and not kept after it: holding
@@ -200,13 +205,19 @@ abstract class HydratedMobX with Store {
       // encoded box or a FileStorage exists to avoid.
       Object? value;
       var read = false;
-      final next = to(key, () {
-        if (!read) {
-          value = target.read(key);
-          read = true;
-        }
-        return value;
-      });
+      final String? next;
+      try {
+        next = to(key, () {
+          if (!read) {
+            value = target.read(key);
+            read = true;
+          }
+          return value;
+        });
+      } catch (error, stackTrace) {
+        failures.add(key, error, stackTrace);
+        continue;
+      }
       if (next == null || next == key || live.contains(next)) continue;
       if (isVersionKey(next)) {
         throw ArgumentError.value(next, 'to', 'returned a version key');
@@ -217,16 +228,21 @@ abstract class HydratedMobX with Store {
     final moved = <String, String>{};
     for (final MapEntry(key: from, value: next) in planned.entries) {
       if (clashing.contains(next)) continue;
-      final done = await _moveOne(
-        source: target,
-        from: from,
-        value: target.read(from),
-        target: target,
-        to: next,
-        exists: existing.contains(next),
-      );
-      if (done) moved[from] = next;
+      try {
+        final done = await _moveOne(
+          source: target,
+          from: from,
+          value: target.read(from),
+          target: target,
+          to: next,
+          exists: existing.contains(next),
+        );
+        if (done) moved[from] = next;
+      } catch (error, stackTrace) {
+        failures.add(from, error, stackTrace);
+      }
     }
+    failures.rethrowFirst();
     return moved;
   }
 
@@ -255,6 +271,9 @@ abstract class HydratedMobX with Store {
           target.read(toVersion) != version) {
         return false;
       }
+      // A run that stopped after the state write left [to] the time of
+      // that write.
+      await _carryUseTime(source, from, target, to);
     } else {
       try {
         if (version != null) {
@@ -269,14 +288,25 @@ abstract class HydratedMobX with Store {
         await target.deleteAll([to, toVersion]).catchError((Object _) {});
         rethrow;
       }
-      if (source is UseTimeStorage && target is UseTimeStorage) {
-        if (source.usedAt(from) case final usedAt?) {
-          await target.setUsedAt(to, usedAt);
-        }
-      }
+      await _carryUseTime(source, from, target, to);
     }
     await source.deleteAll([from, fromVersion]);
     return true;
+  }
+
+  /// Gives [to] in [target] the use time of [from] in [source], when both
+  /// keep use times.
+  static Future<void> _carryUseTime(
+    Storage source,
+    String from,
+    Storage target,
+    String to,
+  ) async {
+    if (source is UseTimeStorage && target is UseTimeStorage) {
+      if (source.usedAt(from) case final usedAt?) {
+        await target.setUsedAt(to, usedAt);
+      }
+    }
   }
 
   /// Moves the state of every token that passes [where] from storage [from]
@@ -312,10 +342,14 @@ abstract class HydratedMobX with Store {
     if (identical(unwrapped(from), unwrapped(to))) {
       throw ArgumentError.value(to, 'to', 'is the same storage as from');
     }
-    final live = {...liveTokens(storage: from), ...liveTokens(storage: to)};
+    // Unwrapped, so a store bound to the inner storage of a wrapper counts.
+    final live = {
+      ...liveTokens(storage: unwrapped(from)),
+      ...liveTokens(storage: unwrapped(to)),
+    };
     final targetKeys = to.keys.toSet();
     final moved = <String>{};
-    (Object, StackTrace)? failed;
+    final failures = _Failures(onError);
     final tokens = [
       for (final key in from.keys)
         if (!isVersionKey(key) && !live.contains(key) && where(key)) key,
@@ -332,16 +366,10 @@ abstract class HydratedMobX with Store {
         );
         if (done) moved.add(token);
       } catch (error, stackTrace) {
-        if (onError != null) {
-          onError(token, error, stackTrace);
-        } else {
-          failed ??= (error, stackTrace);
-        }
+        failures.add(token, error, stackTrace);
       }
     }
-    if (failed case (final error, final stackTrace)) {
-      Error.throwWithStackTrace(error, stackTrace);
-    }
+    failures.rethrowFirst();
     return moved;
   }
 
@@ -352,9 +380,10 @@ abstract class HydratedMobX with Store {
   /// them writes its state back, and any write it had pending is dropped.
   ///
   /// - With [where] `null`, the whole storage is cleared.
-  /// - Otherwise only the keys whose token passes [where] are deleted, in one
-  ///   [Storage.deleteAll], with their version keys; every other key is left
-  ///   untouched. Keys that no store owns are tested by their raw name.
+  /// - Otherwise only the keys whose token passes [where] are deleted, with
+  ///   their version keys, in one call of [Storage.deleteAll], which is as
+  ///   atomic as that storage makes it; every other key is left untouched.
+  ///   Keys that no store owns are tested by their raw name.
   ///
   /// With [resume] `true`, the suspended stores start persisting again
   /// afterwards and write their current state back.
@@ -1171,3 +1200,28 @@ typedef OnHydrationError = HydrationErrorBehavior Function(
 
 /// Signature for a store's own handler of failed state writes.
 typedef OnStorageError = void Function(Object error, StackTrace stackTrace);
+
+/// The failures of a run of token moves: each goes to [_onError], or the
+/// first is kept to rethrow once every token has been tried.
+class _Failures {
+  _Failures(this._onError);
+
+  final void Function(String token, Object error, StackTrace stackTrace)?
+      _onError;
+  (Object, StackTrace)? _first;
+
+  void add(String token, Object error, StackTrace stackTrace) {
+    final onError = _onError;
+    if (onError != null) {
+      onError(token, error, stackTrace);
+    } else {
+      _first ??= (error, stackTrace);
+    }
+  }
+
+  void rethrowFirst() {
+    if (_first case (final error, final stackTrace)) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  }
+}

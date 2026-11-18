@@ -865,6 +865,11 @@ void main() {
       await untracked.close();
     });
 
+    test('build rejects a bad maxEntries before opening the box', () async {
+      expect(() => build(maxEntries: -1), throwsArgumentError);
+      expect(dir.listSync(), isEmpty);
+    });
+
     test('an initialUseTime in the future counts as now', () async {
       final hive = Hive..init(dir.path);
       final legacy = await hive.openBox<dynamic>('future');

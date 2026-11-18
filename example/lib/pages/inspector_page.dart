@@ -25,6 +25,7 @@ class InspectorPage extends StatelessWidget {
               LiveBoxKeys(
                 title: name,
                 storage: storage,
+                showValues: !AppStorages.largeValues.contains(name),
                 onDelete: (key) => HydratedMobX.deleteToken(
                   HydratedMobX.tokenOfKey(key),
                   storage: storage(),

@@ -41,8 +41,10 @@ import 'package:synchronized/synchronized.dart';
 /// their version keys, so a crash midway leaves some keys behind but never
 /// state without its version key. Values are JSON (or bytes), as
 /// [HydratedEncoding.json] or [HydratedEncoding.gzipJson], and are not
-/// encrypted. One storage at a time may use a directory, in this process or
-/// any other. Not available on the web.
+/// encrypted. One storage at a time may use a directory: a second one, from
+/// this isolate or another process, fails to build. Isolates of one process
+/// share its file lock and do not share statics, so the app must keep a
+/// directory to one isolate. Not available on the web.
 /// {@endtemplate}
 class FileStorage implements UseTimeStorage {
   FileStorage._(
@@ -78,8 +80,9 @@ class FileStorage implements UseTimeStorage {
   /// that ignore case, as macOS and Windows do by default.
   static const _alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
 
-  /// Directories this process has open. A file lock is held per process, so
-  /// it cannot tell two storages of one process apart.
+  /// Directories this isolate has open. A file lock is held per process, so
+  /// it cannot tell two storages of one isolate apart; neither can tell two
+  /// isolates of one process apart.
   static final _openDirectories = <String>{};
 
   /// Opens the storage kept in [storageDirectory], creating it if needed.
@@ -94,8 +97,9 @@ class FileStorage implements UseTimeStorage {
   /// - [useResolution]: how often [markUsed] rewrites a file's use time at
   ///   most.
   ///
-  /// Throws a [StateError] when another storage, in this process or another
-  /// one, has the directory open.
+  /// Throws a [StateError] when another storage, in this isolate or another
+  /// process, has the directory open. Another isolate of this process is not
+  /// detected: keep each directory to one isolate.
   static Future<FileStorage> build({
     required HydratedStorageDirectory storageDirectory,
     HydratedEncoding encoding = HydratedEncoding.gzipJson,
@@ -123,7 +127,11 @@ class FileStorage implements UseTimeStorage {
     if (cacheBytes < 0) {
       throw ArgumentError.value(cacheBytes, 'cacheBytes', 'must be >= 0');
     }
-    checkEvictArguments(olderThan: maxAge, maxEntries: maxEntries);
+    checkEvictArguments(
+      olderThan: maxAge,
+      maxEntries: maxEntries,
+      olderThanName: 'maxAge',
+    );
     final dir = Directory(storageDirectory.path);
     await dir.create(recursive: true);
     final path = await dir.resolveSymbolicLinks();
@@ -154,7 +162,9 @@ class FileStorage implements UseTimeStorage {
         final name = entry.uri.pathSegments.last;
         if (name.endsWith(_tempExtension)) {
           // A write the process did not finish; the old value is intact.
-          await entry.delete();
+          // Only this storage's own: the directory may hold other files.
+          final target = name.substring(0, name.length - _tempExtension.length);
+          if (_keyOf(target) != null) await entry.delete();
         } else if (_keyOf(name) case final key?) {
           keys.add(key);
         }
@@ -347,9 +357,21 @@ class FileStorage implements UseTimeStorage {
           await temp.rename(file.path);
           _keys.add(key);
           _cachePut(key, bytes);
-          if (!HydratedMobX.isVersionKey(key)) await _setUsed(key, file);
+          // The rename left the file the time of this write. Its use time is
+          // set as the clock reads it, and at most once per use resolution,
+          // as [markUsed] does.
+          if (_dueStamp(key)) await _setUsed(key, file);
         });
       });
+
+  /// Whether [key] is a state key whose use time was not recorded within
+  /// the use resolution.
+  bool _dueStamp(String key) {
+    if (HydratedMobX.isVersionKey(key)) return false;
+    final last = _usedAt[key];
+    return last == null ||
+        _clock().millisecondsSinceEpoch - last >= _useResolution.inMilliseconds;
+  }
 
   Future<void> _setUsed(String key, File file) async {
     final now = _clock();
@@ -363,31 +385,28 @@ class FileStorage implements UseTimeStorage {
   @override
   Future<void> deleteAll(Iterable<String> keys) {
     final list = keys.toList();
-    return _locked('delete', () {
-      final stored = [
-        for (final key in list)
-          if (_keys.remove(key)) key,
-      ];
-      return _deleteFiles(stored);
-    });
+    return _locked('delete', () => _deleteFiles(list.where(_keys.contains)));
   }
 
-  /// Deletes the files of [keys], which are already out of [_keys], state
-  /// keys first: a crash midway then never leaves state without its
-  /// version key, which would make it read as version 1.
-  Future<void> _deleteFiles(List<String> keys) async {
+  /// Deletes the files of [keys], state keys first: a crash midway then
+  /// never leaves state without its version key, which would make it read
+  /// as version 1. A key is forgotten only once its file is gone, so after
+  /// a failed delete it is still listed, and a retry reaches it.
+  Future<void> _deleteFiles(Iterable<String> keys) async {
+    final list = keys.toList();
     final ordered = [
-      ...keys.where((key) => !HydratedMobX.isVersionKey(key)),
-      ...keys.where(HydratedMobX.isVersionKey),
+      ...list.where((key) => !HydratedMobX.isVersionKey(key)),
+      ...list.where(HydratedMobX.isVersionKey),
     ];
     for (final key in ordered) {
-      _cacheRemove(key);
-      _usedAt.remove(key);
       try {
         await _fileOf(key).delete();
       } on PathNotFoundException {
         // Already gone.
       }
+      _keys.remove(key);
+      _cacheRemove(key);
+      _usedAt.remove(key);
     }
   }
 
@@ -397,11 +416,7 @@ class FileStorage implements UseTimeStorage {
     // Suspend the live stores now: a write they queued behind the lock
     // would otherwise land after the wipe.
     HydratedMobX.suspendAll(storage: this);
-    return _locked('clear', () {
-      final keys = _keys.toList();
-      _keys.clear();
-      return _deleteFiles(keys);
-    });
+    return _locked('clear', () => _deleteFiles(_keys.toList()));
   }
 
   @override
@@ -412,8 +427,13 @@ class FileStorage implements UseTimeStorage {
       _closed = true;
       _cache.clear();
       _cachedBytes = 0;
-      _openDirectories.remove(_directory.path);
-      await _lockFile.close(); // Closing releases the lock.
+      // Closing releases the lock; only then may this isolate open the
+      // directory again.
+      try {
+        await _lockFile.close();
+      } finally {
+        _openDirectories.remove(_directory.path);
+      }
     });
   }
 
@@ -442,10 +462,8 @@ class FileStorage implements UseTimeStorage {
     if (_closed || HydratedMobX.isVersionKey(key) || !_keys.contains(key)) {
       return;
     }
-    final last = _usedAt[key];
-    final now = _clock().millisecondsSinceEpoch;
-    if (last != null && now - last < _useResolution.inMilliseconds) return;
-    _usedAt[key] = now;
+    if (!_dueStamp(key)) return;
+    _usedAt[key] = _clock().millisecondsSinceEpoch;
     // Best effort: a lost use time only makes the key look older.
     unawaited(
       _lock.synchronized(() async {

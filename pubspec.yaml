@@ -16,7 +16,7 @@ topics:
 screenshots:
   - description: A counter store keeps its value after the app is killed and relaunched.
     path: doc/screenshots/demo.gif
-  - description: The example app, one screen per feature.
+  - description: The example app, one screen per feature area.
     path: doc/screenshots/01_home.webp
   - description: 100 rapid changes cost 1 write with persistDelay, and re-creating a store costs none.
     path: doc/screenshots/03_write_stats.webp

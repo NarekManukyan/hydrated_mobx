@@ -15,6 +15,7 @@ class LiveBoxKeys extends StatefulWidget {
     required this.title,
     required this.storage,
     this.onDelete,
+    this.showValues = true,
   });
 
   final String title;
@@ -25,6 +26,10 @@ class LiveBoxKeys extends StatefulWidget {
   /// Shows a delete button per key when set; it deletes the key's whole
   /// token, state and version.
   final void Function(String key)? onDelete;
+
+  /// Whether to read and show each value. Off for storages of large state,
+  /// where reading every value twice a second would decode all of it.
+  final bool showValues;
 
   @override
   State<LiveBoxKeys> createState() => _LiveBoxKeysState();
@@ -61,7 +66,7 @@ class _LiveBoxKeysState extends State<LiveBoxKeys> {
         for (final key in keys)
           KeyValueTile(
             storageKey: key,
-            value: storage.read(key),
+            value: widget.showValues ? storage.read(key) : '(not read)',
             trailing: widget.onDelete == null
                 ? null
                 : IconButton(

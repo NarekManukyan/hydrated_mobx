@@ -19,7 +19,6 @@ class LargeStatePage extends StatefulWidget {
 }
 
 class _LargeStatePageState extends State<LargeStatePage> {
-  var _next = 0;
   var _busy = false;
   String? _result;
 
@@ -37,15 +36,33 @@ class _LargeStatePageState extends State<LargeStatePage> {
     try {
       final result = await action();
       if (mounted) setState(() => _result = result);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed: $error')));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
+  /// The id after the highest one stored in either storage, so new notes
+  /// never overwrite earlier ones.
+  int _nextId() {
+    var next = 0;
+    for (final token in [..._notes(_box), ..._notes(_files)]) {
+      final id = int.tryParse(token.substring(kLargeNotePrefix.length));
+      if (id != null && id >= next) next = id + 1;
+    }
+    return next;
+  }
+
   /// Writes notes through stores bound to the gzipped box.
   Future<String> _addToBox() async {
-    for (var i = 0; i < _kNotesPerTap; i++) {
-      final store = LargeNoteStore('${_next++}', _box)..write(_kLinesPerNote);
+    final first = _nextId();
+    for (var id = first; id < first + _kNotesPerTap; id++) {
+      final store = LargeNoteStore('$id', _box)..write(_kLinesPerNote);
       await store.flush();
       store.dispose();
     }
