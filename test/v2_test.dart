@@ -735,7 +735,11 @@ void main() {
 
       expect(evicted, {'a', 'b'});
       expect(disk.keys, ['c']);
-      expect(await disk.evict(maxEntries: 1), isEmpty);
+      final none = await disk.evict(maxEntries: 1);
+      expect(none, isEmpty);
+      // Either way the caller owns a set it may change.
+      none.add('x');
+      evicted.add('x');
       await disk.close();
     });
 
@@ -744,7 +748,9 @@ void main() {
       final disk = await build(trackUse: false);
       await disk.write('a', 1);
 
-      expect(await disk.evict(maxEntries: 0), isEmpty);
+      final none = await disk.evict(maxEntries: 0);
+      expect(none, isEmpty);
+      none.add('x');
       expect(disk.keys, ['a']);
       await disk.close();
     });
@@ -809,6 +815,25 @@ void main() {
 
       // e has no time, so it counts as used at build: the newest of all.
       expect(disk.keys.toSet(), {'a', 'c', 'e'});
+      await disk.close();
+    });
+
+    test('an initialUseTime in the future counts as now', () async {
+      final hive = Hive..init(dir.path);
+      final legacy = await hive.openBox<dynamic>('future');
+      await legacy.put('k', 1);
+      await legacy.close();
+
+      var disk = await build(
+        boxName: 'future',
+        initialUseTime: (_, __) => DateTime(2030),
+      );
+      now = now.add(const Duration(minutes: 5));
+      await disk.write('newer', 1);
+      await disk.close();
+
+      disk = await build(boxName: 'future', maxEntries: 1);
+      expect(disk.keys, ['newer']);
       await disk.close();
     });
 

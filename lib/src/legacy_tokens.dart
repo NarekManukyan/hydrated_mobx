@@ -10,9 +10,9 @@ class LegacyStore {
   /// {@macro legacy_store}
   const LegacyStore({
     required this.prefix,
-    required this.keys,
+    required this.fields,
     this.legacyPrefix,
-    this.requiredKeys,
+    this.requiredFields,
     this.idPattern,
   });
 
@@ -24,13 +24,13 @@ class LegacyStore {
   /// that wrote it chose the same name. `null` matches by shape only.
   final String? legacyPrefix;
 
-  /// Every top-level key the store's `toJson` writes. A value with any other
-  /// key is not this store's.
-  final List<String> keys;
+  /// Every top-level field the store's `toJson` writes. A value with any
+  /// other field is not this store's.
+  final List<String> fields;
 
-  /// The [keys] every value of this store has. Defaults to the first of
-  /// [keys].
-  final List<String>? requiredKeys;
+  /// The [fields] every value of this store has. Defaults to the first of
+  /// [fields].
+  final List<String>? requiredFields;
 
   /// For a store with one key per id (per note, per chat), the ids its token
   /// can end with, e.g. `RegExp('[0-9a-f]{32}')`. `null` for a store with a
@@ -43,8 +43,9 @@ class LegacyStore {
   /// Whether [value] has the shape of this store's state.
   bool owns(Object? value) {
     if (value is! Map) return false;
-    final required = requiredKeys ?? keys.take(1);
-    return required.every(value.containsKey) && value.keys.every(keys.contains);
+    final required = requiredFields ?? fields.take(1);
+    return required.every(value.containsKey) &&
+        value.keys.every(fields.contains);
   }
 }
 
@@ -60,9 +61,9 @@ abstract final class LegacyTokens {
   /// ```dart
   /// await HydratedMobX.moveTokens(LegacyTokens.match([
   ///   LegacyStore(prefix: 'user', legacyPrefix: '$UserStore',
-  ///       keys: ['currentUser', 'settings']),
+  ///       fields: ['currentUser', 'settings']),
   ///   LegacyStore(prefix: 'chat_', legacyPrefix: '$ChatStore',
-  ///       keys: ['messages'], idPattern: RegExp('[0-9a-f]{32}')),
+  ///       fields: ['messages'], idPattern: RegExp('[0-9a-f]{32}')),
   /// ]));
   /// ```
   ///
@@ -73,11 +74,13 @@ abstract final class LegacyTokens {
   /// store's [LegacyStore.idPattern] accepts, for a keyed store) whose value
   /// has the shape of exactly one store.
   ///
-  /// Both ways require the value to have the store's shape, so a name this
-  /// build gave to a different class never moves one store's state onto
-  /// another. Keys starting with a store's current prefix or one of
-  /// [reservedPrefixes] are never moved.
-  static String? Function(String token, Object? value) match(
+  /// Both ways require the value to have the store's shape, and for a keyed
+  /// store the rest of the key to be an id [LegacyStore.idPattern] accepts,
+  /// so a name this build gave to a different class never moves one store's
+  /// state onto another, or onto a token no store reads. Keys starting with
+  /// a store's current prefix or one of [reservedPrefixes] are never read or
+  /// moved.
+  static String? Function(String token, Object? Function() value) match(
     List<LegacyStore> stores, {
     Iterable<String> reservedPrefixes = const [],
   }) {
@@ -85,18 +88,29 @@ abstract final class LegacyTokens {
       for (final store in stores) store.prefix,
       ...reservedPrefixes,
     ];
-    // Backtracks so the class name ends where an id starts, whatever
-    // characters the two share.
+    RegExp like(RegExp id, String pattern) => RegExp(
+          pattern,
+          caseSensitive: id.isCaseSensitive,
+          unicode: id.isUnicode,
+          dotAll: id.isDotAll,
+          multiLine: id.isMultiLine,
+        );
+    // Whole ids, for keys found by name.
+    final ids = {
+      for (final store in stores)
+        if (store.idPattern case final id?)
+          store: like(id, '^(?:${id.pattern})\$'),
+    };
+    // A class name and an id. Backtracks so the name ends where the id
+    // starts, whatever characters the two share.
     final keyedTokens = {
       for (final store in stores)
         if (store.idPattern case final id?)
-          store: RegExp(
-            '^${_identifier.pattern}(${id.pattern})\$',
-            caseSensitive: id.isCaseSensitive,
-          ),
+          store: like(id, '^${_identifier.pattern}(${id.pattern})\$'),
     };
-    return (token, value) {
+    return (token, read) {
       if (owned.any(token.startsWith)) return null;
+      final value = read();
       final candidates = [
         for (final store in stores)
           if (store.owns(value)) store,
@@ -105,7 +119,9 @@ abstract final class LegacyTokens {
         final legacy = store.legacyPrefix;
         if (legacy == null || !token.startsWith(legacy)) continue;
         final id = token.substring(legacy.length);
-        if (store.keyed || id.isEmpty) return '${store.prefix}$id';
+        if (id.isEmpty || (ids[store]?.hasMatch(id) ?? false)) {
+          return '${store.prefix}$id';
+        }
       }
       if (candidates.length != 1) return null;
       final store = candidates.single;

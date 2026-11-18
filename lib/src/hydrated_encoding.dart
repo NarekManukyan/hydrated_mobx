@@ -26,16 +26,23 @@ const _jsonFormat = 1;
 const _gzipFormat = 2;
 const _headerLength = 4;
 
+/// Writes UTF-8 JSON straight to bytes, without a `String` in between.
+final _toUtf8Json = JsonUtf8Encoder();
+
+/// Reads UTF-8 JSON straight from bytes; the fused decoder skips the
+/// intermediate `String`.
+final _fromUtf8Json = utf8.decoder.fuse(json.decoder);
+
 /// Turns state into what the box keeps, and back. Internal.
 class HydratedValueCodec {
-  /// Encodes maps and lists whose JSON is at least [encodeAbove] bytes long
+  /// Encodes maps and lists whose JSON is longer than [encodeAbove] bytes
   /// as [encoding] says.
   const HydratedValueCodec(this.encoding, {this.encodeAbove = 0});
 
   /// How large state is kept.
   final HydratedEncoding encoding;
 
-  /// Size of UTF-8 JSON below which state stays a tree.
+  /// Size of UTF-8 JSON up to which state stays a tree.
   final int encodeAbove;
 
   /// The form [value] is kept in: itself, or its encoded bytes.
@@ -48,13 +55,13 @@ class HydratedValueCodec {
     }
     final List<int> bytes;
     try {
-      bytes = utf8.encode(jsonEncode(value));
+      bytes = _toUtf8Json.convert(value);
       // Thrown for values JSON cannot hold, which is not a bug here.
       // ignore: avoid_catching_errors
     } on JsonUnsupportedObjectError {
       return value; // Not plain JSON, e.g. imported data: Hive keeps it.
     }
-    if (bytes.length < encodeAbove) return value;
+    if (bytes.length <= encodeAbove) return value;
     final gzipped = encoding == HydratedEncoding.gzipJson;
     final body = gzipped ? gzipEncode(bytes) : bytes;
     return Uint8List(_headerLength + body.length)
@@ -65,20 +72,35 @@ class HydratedValueCodec {
 
   /// [stored] decoded when it is an encoded value, otherwise as it is, so
   /// values written before an encoding was chosen still read.
-  static Object? decode(Object? stored) {
-    if (!isEncoded(stored)) return stored;
-    final bytes = stored! as Uint8List;
-    final body = Uint8List.sublistView(bytes, _headerLength);
-    final text = bytes[3] == _gzipFormat ? gzipDecode(body) : body;
-    return jsonDecode(utf8.decode(text));
+  Object? decode(Object? stored) {
+    final format = _formatOf(stored);
+    if (format == null) return stored;
+    final body = Uint8List.sublistView(stored! as Uint8List, _headerLength);
+    return _fromUtf8Json
+        .convert(format == _gzipFormat ? gzipDecode(body) : body);
   }
 
-  /// Whether [stored] is a value [encode] produced.
-  static bool isEncoded(Object? stored) =>
-      stored is Uint8List &&
-      stored.length >= _headerLength &&
-      stored[0] == _magic[0] &&
-      stored[1] == _magic[1] &&
-      stored[2] == _magic[2] &&
-      (stored[3] == _jsonFormat || stored[3] == _gzipFormat);
+  /// [stored] in the form [encode] gives the value it decodes to, or
+  /// [stored] itself when it already has that form, which the caller can
+  /// tell by identity.
+  Object? reencode(Object? stored) {
+    final format = _formatOf(stored);
+    final state = decode(stored);
+    final wanted = encode(state);
+    if (identical(wanted, state)) return format == null ? stored : state;
+    return format == (wanted! as Uint8List)[3] ? stored : wanted;
+  }
+
+  /// The format byte of an encoded value, or `null` for any other value.
+  static int? _formatOf(Object? stored) {
+    if (stored is! Uint8List ||
+        stored.length < _headerLength ||
+        stored[0] != _magic[0] ||
+        stored[1] != _magic[1] ||
+        stored[2] != _magic[2]) {
+      return null;
+    }
+    final format = stored[3];
+    return format == _jsonFormat || format == _gzipFormat ? format : null;
+  }
 }

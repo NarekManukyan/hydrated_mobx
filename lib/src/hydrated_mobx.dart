@@ -165,43 +165,49 @@ abstract class HydratedMobX with Store {
   /// [LegacyTokens]).
   ///
   /// [to] is asked for the new token of every state key in [storage] (the
-  /// global one by default), given its stored value; `null` or the same key
-  /// leaves it where it is. The state moves with its version key. Returns the
-  /// moves made, old token to new.
+  /// global one by default); `null` or the same key leaves it where it is.
+  /// It gets the stored value as a function, so a key it rejects by name is
+  /// never read (from a `FileStorage`, a read is a file read). The state moves
+  /// with its version key. Returns the moves made, old token to new.
   ///
   /// Nothing is overwritten. A move is skipped when:
-  /// - the new token already holds different state, or a stale version key
-  ///   only (which is replaced);
+  /// - the new token already holds different state, or the same state under
+  ///   another version;
   /// - two keys would move to the same token;
   /// - a live store uses either token, since it would not see the move.
   ///
+  /// A version key left at the new token without its state is replaced.
   /// When the new token already holds the same state, the old key is
   /// deleted; that is how an interrupted run finishes. Each move writes the
   /// version, then the state, then deletes the old keys, so it is safe to run
   /// again after a crash. Call it at startup, before constructing the stores.
   static Future<Map<String, String>> moveTokens(
-    String? Function(String token, Object? value) to, {
+    String? Function(String token, Object? Function() value) to, {
     Storage? storage,
   }) async {
     final target = storage ?? HydratedMobX.storage;
     final live = liveTokens(storage: target);
     final existing = target.keys.toSet();
+    final values = <String, Object?>{};
+    Object? valueOf(String key) =>
+        values.containsKey(key) ? values[key] : values[key] = target.read(key);
     final planned = <String, String>{};
+    final targets = <String>{};
     final clashing = <String>{};
     for (final key in existing) {
       if (isVersionKey(key) || live.contains(key)) continue;
-      final next = to(key, target.read(key));
+      final next = to(key, () => valueOf(key));
       if (next == null || next == key || live.contains(next)) continue;
       if (isVersionKey(next)) {
         throw ArgumentError.value(next, 'to', 'returned a version key');
       }
-      if (planned.containsValue(next)) clashing.add(next);
+      if (!targets.add(next)) clashing.add(next);
       planned[key] = next;
     }
     final moved = <String, String>{};
     for (final MapEntry(key: from, value: next) in planned.entries) {
       if (clashing.contains(next)) continue;
-      final value = target.read(from);
+      final value = valueOf(from);
       final fromVersion = versionKeyOf(from);
       if (existing.contains(next)) {
         if (!_jsonEquals(target.read(next), value) ||

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:hive_ce/hive.dart';
 // hive_ce does not expose HiveImpl through its public API (the class is marked
@@ -207,14 +208,17 @@ class HydratedStorage implements UseTrackingStorage {
   /// - [initialUseTime] gives keys that have no use time yet (state written
   ///   before tracking was turned on) one from their stored value, e.g. a
   ///   last-opened or created-at field, so the first eviction ranks them by
-  ///   it. Keys it returns `null` for count as used at build.
-  /// - [encoding] keeps state of at least [encodeAbove] bytes of JSON as
+  ///   it. Keys it returns `null` for count as used at build, and a time
+  ///   after now counts as now.
+  /// - [encoding] keeps state of more than [encodeAbove] bytes of JSON as
   ///   bytes rather than as maps and lists, which Hive would hold decoded in
-  ///   memory for as long as the box is open. Each read then decodes it. State
-  ///   already in the box is converted at build, and either way any value
-  ///   reads back, so the setting can change between launches. A box with
-  ///   encoded values must not be opened by hydrated_mobx before 2.1: it
-  ///   would fail to hydrate them, and overwrite them.
+  ///   memory for as long as the box is open. Each read then decodes it.
+  ///   When either setting changes, the first build after it converts the
+  ///   values already in the box to it, back to [HydratedEncoding.tree]
+  ///   included; later builds skip that. Any value reads back whatever the
+  ///   setting. A box with encoded values must not be opened by
+  ///   hydrated_mobx before 2.1: it would fail to hydrate them, and
+  ///   overwrite them.
   /// - [compactionStrategy] overrides when Hive rewrites the box file.
   static Future<HydratedStorage> build({
     required HydratedStorageDirectory storageDirectory,
@@ -277,8 +281,9 @@ class HydratedStorage implements UseTrackingStorage {
         codec: HydratedValueCodec(encoding, encodeAbove: encodeAbove),
       );
       try {
-        await storage._encodeStored();
+        // Stamping first reads values before they are encoded.
         await storage._stampUntracked(initialUseTime);
+        await storage._encodeStored();
         if (maxAge != null || maxEntries != null) {
           await storage.evict(
             olderThan: maxAge,
@@ -334,7 +339,7 @@ class HydratedStorage implements UseTrackingStorage {
   @override
   dynamic read(String key) {
     _checkOpen('read');
-    return HydratedValueCodec.decode(_box.get(key));
+    return _codec.decode(_box.get(key));
   }
 
   @override
@@ -392,8 +397,8 @@ class HydratedStorage implements UseTrackingStorage {
   }
 
   /// Deletes stale state, together with its `.__version` key, and returns
-  /// the state keys it deleted, so state kept beside them under other keys
-  /// can go too.
+  /// a new set of the state keys it deleted, so state kept beside them under
+  /// other keys can go too.
   ///
   /// - [olderThan] drops every key not hydrated or written for that long.
   /// - [maxEntries] then keeps only that many keys, the most recently used.
@@ -424,7 +429,7 @@ class HydratedStorage implements UseTrackingStorage {
     final meta = _meta;
     if (meta == null) {
       _checkOpen('evict');
-      return const {};
+      return <String>{};
     }
     // Let use times already queued by [markUsed] land first, or a key used
     // just now could be judged by its previous use time.
@@ -453,7 +458,7 @@ class HydratedStorage implements UseTrackingStorage {
       ]..sort((a, b) => b.usedAt.compareTo(a.usedAt));
       doomed.addAll(kept.skip(maxEntries).map((c) => c.key));
     }
-    if (doomed.isEmpty) return const {};
+    if (doomed.isEmpty) return doomed;
     // The shared path: suspends live stores of doomed keys and deletes their
     // version keys too.
     await HydratedMobX.clearAll(storage: this, where: doomed.contains);
@@ -465,17 +470,29 @@ class HydratedStorage implements UseTrackingStorage {
     return value is int ? value : null;
   }
 
-  /// Rewrites state still kept as a tree in the form [_codec] keeps it, so
-  /// the memory it takes drops now rather than at its next change.
+  /// Key of the record of the setting the box's values were last converted
+  /// to. An int, so [keys], which lists strings only, never shows it.
+  static const _encodingKey = 0x484d4531; // 'HME1'
+
+  /// Converts the values in the box to [_codec]'s setting, when it is not
+  /// the one they were last converted to, so the memory they take changes
+  /// now rather than at their next write.
   Future<void> _encodeStored() async {
-    if (_codec.encoding == HydratedEncoding.tree) return;
-    final converted = <String, Object?>{};
+    final setting = _codec.encoding == HydratedEncoding.tree
+        ? HydratedEncoding.tree.name
+        : '${_codec.encoding.name}:${_codec.encodeAbove}';
+    final last = _box.get(_encodingKey);
+    if (last == setting) return;
+    // A box never converted holds no encoded values to turn back.
+    if (last == null && _codec.encoding == HydratedEncoding.tree) return;
+    final converted = <Object, Object?>{};
     for (final key in keys) {
-      final value = _box.get(key);
-      final encoded = _codec.encode(value);
-      if (!identical(encoded, value)) converted[key] = encoded;
+      final stored = _box.get(key);
+      final next = _codec.reencode(stored);
+      if (!identical(next, stored)) converted[key] = next;
     }
-    if (converted.isNotEmpty) await _box.putAll(converted);
+    converted[_encodingKey] = setting;
+    await _box.putAll(converted);
   }
 
   /// Gives every key without a use time one, so state written before
@@ -487,11 +504,14 @@ class HydratedStorage implements UseTrackingStorage {
     final meta = _meta;
     if (meta == null) return;
     final now = _clock().millisecondsSinceEpoch;
+    // A time in the future would rank the key above every use to come, and
+    // keep [_dueStamp] from recording one until then.
+    int stampOf(DateTime? time) =>
+        time == null ? now : min(time.millisecondsSinceEpoch, now);
     final untracked = {
       for (final key in keys)
         if (!HydratedMobX.isVersionKey(key) && !meta.containsKey(key))
-          key: initialUseTime?.call(key, read(key))?.millisecondsSinceEpoch ??
-              now,
+          key: stampOf(initialUseTime?.call(key, read(key))),
     };
     if (untracked.isNotEmpty) await meta.putAll(untracked);
   }
