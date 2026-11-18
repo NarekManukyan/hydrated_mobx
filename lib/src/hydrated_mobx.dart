@@ -224,6 +224,53 @@ abstract class HydratedMobX with Store {
     return moved;
   }
 
+  /// Moves the state of every token that passes [where] from storage [from]
+  /// into [to], with its version key, e.g. per-document state from a Hive
+  /// box into a `FileStorage`. Returns the tokens moved.
+  ///
+  /// Each token is written to [to] (version, then state) before it is
+  /// deleted from [from], so a crash leaves it in one storage or both, never
+  /// in neither, and running again finishes the move. A token [to] already
+  /// holds with different state stays in [from]; one it holds with the same
+  /// state is only deleted from [from]. Tokens of live stores bound to
+  /// either storage are skipped. Call it at startup, before constructing the
+  /// stores.
+  static Future<Set<String>> transferTokens({
+    required Storage from,
+    required Storage to,
+    required bool Function(String token) where,
+  }) async {
+    final live = {...liveTokens(storage: from), ...liveTokens(storage: to)};
+    final targetKeys = to.keys.toSet();
+    final moved = <String>{};
+    final tokens = [
+      for (final key in from.keys)
+        if (!isVersionKey(key) && !live.contains(key) && where(key)) key,
+    ];
+    for (final token in tokens) {
+      final value = from.read(token);
+      final versionKey = versionKeyOf(token);
+      final version = from.read(versionKey);
+      if (targetKeys.contains(token)) {
+        if (!_jsonEquals(to.read(token), value) ||
+            to.read(versionKey) != version) {
+          continue;
+        }
+      } else {
+        if (version != null) {
+          await to.write(versionKey, version);
+        } else {
+          // An absent key reads as version 1; drop one left behind.
+          await to.delete(versionKey);
+        }
+        await to.write(token, value);
+      }
+      await from.deleteAll([token, versionKey]);
+      moved.add(token);
+    }
+    return moved;
+  }
+
   /// Wipes persisted state from [storage] (the global one by default).
   ///
   /// Every live store bound to [storage] whose [storageToken] passes [where]

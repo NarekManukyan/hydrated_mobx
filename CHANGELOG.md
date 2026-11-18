@@ -24,7 +24,13 @@
   instead of decoded maps and lists. For 200 note-sized states that is 142 MB
   of heap with `tree`, 25 MB with `json` and 2.4 MB with `gzipJson`. Existing
   state is converted at build. Versions before 2.1 cannot read an encoded box.
-- `benchmark/memory_benchmark.dart`.
+- `FileStorage` (`package:hydrated_mobx/file_storage.dart`): one file per
+  key, nothing in memory until read, with `preload`, a bounded cache of
+  recent values, atomic writes and the same eviction as `HydratedStorage`.
+  Not available on the web.
+- `HydratedMobX.transferTokens(from:, to:, where:)` moves state between
+  storages, writing before deleting.
+- `benchmark/memory_benchmark.dart`, for both storages.
 
 ## [2.0.0] - 2026-10-29
 

@@ -31,7 +31,8 @@ The screens come from the [example app](example), one per feature.
 - **Targeted clearing:** `clearAll(where:)` deletes only the tokens you name, in
   one operation, and stops their stores first.
 - **Memory:** `encoding: HydratedEncoding.gzipJson` keeps large state as
-  bytes, not decoded trees, until a store hydrates it.
+  bytes, not decoded trees, until a store hydrates it; `FileStorage` keeps
+  per-id state on disk until it is used.
 - **Eviction:** `maxAge` and `maxEntries` keep per-id caches from growing
   forever.
 - **Schema versions:** `version` + `migrate`, which can also drop old data.
@@ -56,11 +57,12 @@ The screens come from the [example app](example), one per feature.
 200 note-sized states (900 transcript segments each, 28.7 MB of JSON), none of
 them hydrated:
 
-| `encoding` | Heap held | File | Open | Read, per note |
+| Storage | Heap held | On disk | Open | Read, per note |
 | --- | --- | --- | --- | --- |
-| `tree` (default) | 142.4 MB | 34.9 MB | 262 ms | 0 ms |
-| `json` | 24.8 MB | 28.7 MB | 89 ms | 0.57 ms |
-| `gzipJson` | **2.4 MB** | 4.0 MB | 21 ms | 0.68 ms |
+| `HydratedStorage`, `tree` (default) | 142 MB | 34.9 MB | 264 ms | 0 ms |
+| `HydratedStorage`, `json` | 25 MB | 28.7 MB | 86 ms | 0.57 ms |
+| `HydratedStorage`, `gzipJson` | 2.9 MB | 4.0 MB | 15 ms | 0.66 ms |
+| `FileStorage`, `gzipJson` | **0 MB** | 4.0 MB | 4 ms | 0.71 ms, from disk |
 
 ## Getting started
 
@@ -378,6 +380,50 @@ is built, and every value reads back whatever the setting, so it can change
 between launches. Do not let a version of hydrated_mobx before 2.1 open an
 encoded box: it cannot read the encoded values, and its stores would overwrite
 them.
+
+### One file per key
+
+Encoded state is small, but a box still holds all of it. For per-id state
+that only matters while its screen is open, `FileStorage` keeps each key in a
+file and holds nothing in memory until a store reads it:
+
+```dart
+import 'package:hydrated_mobx/file_storage.dart';
+
+final notes = await FileStorage.build(
+  directory: '${support.path}/notes',
+  maxEntries: 50, // optional, as with HydratedStorage
+);
+
+// Before showing a note: read it ahead, so the store hydrates from memory.
+await notes.preload('note_$id');
+final store = NoteStore(id, storage: notes);
+```
+
+- Opening lists the directory and reads nothing.
+- `read` stays synchronous. A key that was not preloaded or used lately is
+  read from its file there and then, which blocks for that read, a fraction of
+  a millisecond for 100 KB on a phone's flash.
+- The last `cacheBytes` (8 MB by default) of encoded values read or written
+  stay in memory.
+- A write goes to a temporary file that is renamed over the old one, so a
+  crash keeps the old value or the new one.
+- Eviction (`maxAge`, `maxEntries`, `evict`) works as with `HydratedStorage`,
+  using each file's modification time as its use time.
+- It is not available on the web, so it has its own import.
+
+`HydratedMobX.transferTokens` moves existing state over, once, at startup:
+
+```dart
+await HydratedMobX.transferTokens(
+  from: HydratedMobX.storage, // the Hive box
+  to: notes,
+  where: (token) => token.startsWith('note_'),
+);
+```
+
+Each token is written to the new storage before it is deleted from the old
+one, so an interrupted run loses nothing and the next launch finishes it.
 
 ## Schema versions
 

@@ -8,6 +8,8 @@
 //     ENCODING=$e dart run --enable-vm-service=0 \
 //       --disable-service-auth-codes benchmark/memory_benchmark.dart
 //   done
+// STORAGE=file measures a FileStorage instead (json or gzipJson), reading
+// every note from disk.
 // ignore_for_file: avoid_print
 
 import 'dart:async';
@@ -16,6 +18,7 @@ import 'dart:developer';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:hydrated_mobx/file_storage.dart';
 import 'package:hydrated_mobx/hydrated_mobx.dart';
 
 const _notes = 200;
@@ -104,29 +107,33 @@ Future<void> main() async {
   final dir = await Directory.systemTemp.createTemp('hydrated_memory_');
   final directory = HydratedStorageDirectory(dir.path);
   final vm = await _Vm.connect();
+  final files = Platform.environment['STORAGE'] == 'file';
+  Future<Storage> open() => files
+      ? FileStorage.build(
+          directory: dir.path,
+          encoding: encoding,
+          cacheBytes: 0,
+        )
+      : HydratedStorage.build(storageDirectory: directory, encoding: encoding);
 
   var utf8Bytes = 0;
   final random = Random(7);
-  final writer = await HydratedStorage.build(
-    storageDirectory: directory,
-    encoding: encoding,
-  );
+  final writer = await open();
   for (var n = 0; n < _notes; n++) {
     final note = _note(n, random);
     utf8Bytes += utf8.encode(jsonEncode(note)).length;
     await writer.write('note_$n', note);
   }
   await writer.close();
-  final fileMb =
-      File('${dir.path}/${HydratedStorage.defaultBoxName}.hive').lengthSync() /
-          1048576;
+  final fileMb = [
+        for (final entry in dir.listSync())
+          if (entry is File) entry.lengthSync(),
+      ].fold<int>(0, (a, b) => a + b) /
+      1048576;
 
   final before = await vm.heapMb();
   final watch = Stopwatch()..start();
-  final storage = await HydratedStorage.build(
-    storageDirectory: directory,
-    encoding: encoding,
-  );
+  final storage = await open();
   final openMs = watch.elapsedMilliseconds;
   final heldMb = await vm.heapMb() - before;
 
@@ -138,7 +145,7 @@ Future<void> main() async {
 
   final jsonMb = utf8Bytes / 1048576;
   print(
-    '${encoding.name.padRight(8)} '
+    '${files ? 'file' : 'box '} ${encoding.name.padRight(8)} '
     'heap +${heldMb.toStringAsFixed(1)} MB '
     '(${(heldMb / jsonMb).toStringAsFixed(2)}x the JSON) | '
     'file ${fileMb.toStringAsFixed(1)} MB | open $openMs ms | '
