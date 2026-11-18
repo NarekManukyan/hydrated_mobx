@@ -223,6 +223,8 @@ abstract class HydratedMobX with Store {
     for (final MapEntry(key: from, value: next) in planned.entries) {
       if (clashing.contains(next) || planned.containsKey(next)) continue;
       final value = target.read(from);
+      // Gone since the keys were listed: deleted, or behind a queued delete.
+      if (value == null) continue;
       final fromVersion = versionKeyOf(from);
       if (existing.contains(next)) {
         if (!_jsonEquals(target.read(next), value) ||
