@@ -343,6 +343,49 @@ void main() {
       expect(reads, 0);
     });
 
+    test('reads no key whose name no store could have written', () {
+      var reads = 0;
+      Object? read() {
+        reads++;
+        return {'messages': <Object>[]};
+      }
+
+      expect(to('some.key', read), isNull);
+      expect(to('a/b', read), isNull);
+      expect(to('draft-1', read), isNull);
+      expect(reads, 0);
+    });
+
+    test('finds a 1.x type name that starts with the current prefix', () {
+      final counter = LegacyTokens.match([
+        const LegacyStore(
+          prefix: 'Counter',
+          legacyPrefix: 'CounterStore',
+          fields: ['count'],
+        ),
+      ]);
+
+      expect(_at(counter, 'CounterStore', {'count': 1}), 'Counter');
+      expect(_at(counter, 'Counter', {'count': 1}), isNull);
+    });
+
+    test('ignores anchors in idPattern', () {
+      final anchored = LegacyTokens.match([
+        LegacyStore(
+          prefix: 'chat_',
+          legacyPrefix: 'ChatStore',
+          fields: const ['messages'],
+          idPattern: RegExp(r'^[0-9a-f]{32}$'),
+        ),
+      ]);
+
+      expect(
+        _at(anchored, 'ChatStore$_id', {'messages': <Object>[]}),
+        'chat_$_id',
+      );
+      expect(_at(anchored, 'Qz$_id', {'messages': <Object>[]}), 'chat_$_id');
+    });
+
     test('a type name now given to another class does not move state', () {
       expect(_at(to, 'UserStore', {'messages': <Object>[]}), 'chat_');
       expect(_at(to, 'UserStore', {'unknown': 1}), isNull);

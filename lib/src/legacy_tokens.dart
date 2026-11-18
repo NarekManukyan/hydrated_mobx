@@ -34,7 +34,8 @@ class LegacyStore {
 
   /// For a store with one key per id (per note, per chat), the ids its token
   /// can end with, e.g. `RegExp('[0-9a-f]{32}')`. `null` for a store with a
-  /// single key.
+  /// single key. [LegacyTokens.match] anchors it itself, so a leading `^` and
+  /// a trailing `$` are ignored.
   final RegExp? idPattern;
 
   /// Whether [value] has the shape of this store's state.
@@ -84,7 +85,10 @@ abstract final class LegacyTokens {
   /// state onto another.
   ///
   /// Keys starting with a store's current prefix or one of
-  /// [reservedPrefixes] are never read or moved.
+  /// [reservedPrefixes] are never read or moved, unless a longer
+  /// [LegacyStore.legacyPrefix] also starts them: a store now under
+  /// `Settings` still finds its 1.x key `SettingsStore`. Keys whose name no
+  /// store could have written, such as `some.key`, are not read either.
   static String? Function(String token, Object? Function() value) match(
     List<LegacyStore> stores, {
     Iterable<String> reservedPrefixes = const [],
@@ -93,6 +97,23 @@ abstract final class LegacyTokens {
       for (final store in stores) store.prefix,
       ...reservedPrefixes,
     ];
+    final legacyPrefixes = [
+      for (final store in stores)
+        if (store.legacyPrefix case final legacy?) legacy,
+    ];
+    bool isOwned(String token) {
+      var longest = -1;
+      for (final prefix in owned) {
+        if (prefix.length > longest && token.startsWith(prefix)) {
+          longest = prefix.length;
+        }
+      }
+      return longest >= 0 &&
+          !legacyPrefixes.any(
+            (legacy) => legacy.length > longest && token.startsWith(legacy),
+          );
+    }
+
     RegExp like(RegExp id, String pattern) => RegExp(
           pattern,
           caseSensitive: id.isCaseSensitive,
@@ -104,37 +125,60 @@ abstract final class LegacyTokens {
     final ids = {
       for (final store in stores)
         if (store.idPattern case final id?)
-          store: like(id, '^(?:${id.pattern})\$'),
+          store: like(id, '^(?:${_unanchored(id)})\$'),
     };
     // A class name and an id. The name is as short as it can be, so the id
     // is as long as the pattern allows, whatever characters the two share.
     final keyedTokens = {
       for (final store in stores)
         if (store.idPattern case final id?)
-          store: like(id, '^$_shortestIdentifier(${id.pattern})\$'),
+          store: like(id, '^$_shortestIdentifier(${_unanchored(id)})\$'),
     };
     return (token, read) {
-      if (owned.any(token.startsWith)) return null;
+      if (isOwned(token)) return null;
+      bool named(LegacyStore store) {
+        final legacy = store.legacyPrefix;
+        if (legacy == null || !token.startsWith(legacy)) return false;
+        final id = token.substring(legacy.length);
+        return id.isEmpty || (ids[store]?.hasMatch(id) ?? false);
+      }
+
+      final keyed = {
+        for (final MapEntry(key: store, value: pattern) in keyedTokens.entries)
+          if (pattern.firstMatch(token) case final match?) store: match,
+      };
+      // A store with a single key, or a keyed store built without an id.
+      final single = _identifier.matchAsPrefix(token)?.end == token.length;
+      if (!single && keyed.isEmpty && !stores.any(named)) return null;
+
       final value = read();
       final candidates = [
         for (final store in stores)
           if (store._owns(value)) store,
       ];
       for (final store in candidates) {
-        final legacy = store.legacyPrefix;
-        if (legacy == null || !token.startsWith(legacy)) continue;
-        final id = token.substring(legacy.length);
-        if (id.isEmpty || (ids[store]?.hasMatch(id) ?? false)) {
+        if (named(store)) {
+          final id = token.substring(store.legacyPrefix!.length);
           return '${store.prefix}$id';
         }
       }
       if (candidates.length != 1) return null;
       final store = candidates.single;
-      final keyed = keyedTokens[store]?.firstMatch(token);
-      if (keyed != null) return '${store.prefix}${keyed.group(1)}';
-      // A store with a single key, or a keyed store built without an id.
-      final name = _identifier.matchAsPrefix(token);
-      return name?.end == token.length ? store.prefix : null;
+      if (keyed[store] case final match?) {
+        return '${store.prefix}${match.group(1)}';
+      }
+      return single ? store.prefix : null;
     };
+  }
+
+  /// [id]'s pattern without a leading `^` or a trailing `$`, which would
+  /// stop it matching after a class name.
+  static String _unanchored(RegExp id) {
+    var pattern = id.pattern;
+    if (pattern.startsWith('^')) pattern = pattern.substring(1);
+    if (pattern.endsWith(r'$') && !pattern.endsWith(r'\$')) {
+      pattern = pattern.substring(0, pattern.length - 1);
+    }
+    return pattern;
   }
 }
