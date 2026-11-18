@@ -482,7 +482,7 @@ class FileStorage implements UseTimeStorage {
         olderThan: olderThan,
         maxEntries: maxEntries,
         where: where,
-        live: keepLive ? HydratedMobX.liveTokens(storage: this) : null,
+        live: keepLive ? () => HydratedMobX.liveTokens(storage: this) : null,
       ),
     );
     if (doomed.isEmpty) return doomed;

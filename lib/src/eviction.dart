@@ -15,8 +15,9 @@ void checkEvictArguments({Duration? olderThan, int? maxEntries}) {
 /// The state keys among [keys] that `evict` deletes, given each one's
 /// [usedAt] (ms since epoch) and the time [now]: those not used for
 /// [olderThan], then all but the [maxEntries] most recently used of the
-/// rest. Version keys, keys in [live] and keys [where] rejects are never
-/// chosen and do not count towards [maxEntries].
+/// rest. Version keys, keys [where] rejects and keys in [live] are never
+/// chosen and do not count towards [maxEntries]. [live] is read after
+/// [where] has run, which may itself have created a store.
 @internal
 Set<String> evictionsAmong(
   Iterable<String> keys, {
@@ -25,14 +26,16 @@ Set<String> evictionsAmong(
   Duration? olderThan,
   int? maxEntries,
   bool Function(String key)? where,
-  Set<String>? live,
+  Set<String> Function()? live,
 }) {
-  final candidates = [
+  final accepted = [
     for (final key in keys)
-      if (!HydratedMobX.isVersionKey(key) &&
-          !(live?.contains(key) ?? false) &&
-          (where?.call(key) ?? true))
-        (key: key, usedAt: usedAt(key)),
+      if (!HydratedMobX.isVersionKey(key) && (where?.call(key) ?? true)) key,
+  ];
+  final spared = live?.call() ?? const <String>{};
+  final candidates = [
+    for (final key in accepted)
+      if (!spared.contains(key)) (key: key, usedAt: usedAt(key)),
   ];
   final doomed = <String>{};
   if (olderThan != null) {

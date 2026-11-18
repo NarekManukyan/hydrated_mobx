@@ -776,6 +776,26 @@ void main() {
       await disk.close();
     });
 
+    test('keepLive spares a store that where itself created', () async {
+      final disk = await build();
+      await disk.write('counterpeek', {'count': 1});
+      _Counter? peeked;
+
+      final evicted = await disk.evict(
+        maxEntries: 0,
+        keepLive: true,
+        where: (key) {
+          peeked ??= _Counter(storage: disk, storeId: 'peek');
+          return true;
+        },
+      );
+      addTearDown(peeked!.dispose);
+
+      expect(evicted, isEmpty);
+      expect(disk.read('counterpeek'), {'count': 1});
+      await disk.close();
+    });
+
     test('liveTokens lists the stores bound to a storage until disposed',
         () async {
       final disk = await build();
