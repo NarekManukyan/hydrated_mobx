@@ -468,7 +468,8 @@ abstract class HydratedMobX with Store {
   ///
   /// [to] built with `maxAge` or `maxEntries` evicts before the stores move
   /// over, so a store whose key it evicted would write it back. Build [to]
-  /// with `trackUse: true` instead, rebind, then call `evict`.
+  /// without them (with `trackUse: true` for a [HydratedStorage]), rebind,
+  /// then call `evict`.
   static void rebindAll({required Storage from, required Storage to}) {
     for (final store in _live(from, throughWrappers: false)) {
       store

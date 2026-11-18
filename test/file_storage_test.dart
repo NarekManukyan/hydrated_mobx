@@ -543,6 +543,24 @@ void main(List<String> args) {
     await disk.close();
   });
 
+  test('a key used while evict ranks keeps that use time', () async {
+    var disk = await build();
+    for (final key in ['a', 'b', 'c']) {
+      await disk.write(key, 1);
+      now = now.add(const Duration(minutes: 5));
+    }
+    await disk.close();
+
+    // The use times load in an isolate; markUsed does not wait for it.
+    disk = await build();
+    final evicted = disk.evict(maxEntries: 2);
+    await Future<void>.delayed(Duration.zero);
+    disk.markUsed('a');
+    expect(await evicted, {'b'});
+    expect(disk.keys.toSet(), {'a', 'c'});
+    await disk.close();
+  });
+
   test('evict leaves out keys a queued delete hides', () async {
     final disk = await build();
     for (final key in ['a', 'b', 'c']) {
@@ -688,6 +706,14 @@ void main(List<String> args) {
       () => build(encoding: HydratedEncoding.tree),
       throwsArgumentError,
     );
+  });
+
+  test('build rejects the web directory and a negative cacheBytes', () {
+    expect(
+      () => FileStorage.build(storageDirectory: HydratedStorageDirectory.web),
+      throwsArgumentError,
+    );
+    expect(() => build(cacheBytes: -1), throwsArgumentError);
   });
 
   group('transferTokens', () {

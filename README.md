@@ -445,8 +445,9 @@ final store = NoteStore(id, storage: notes);
   `FileStorage` kept there must be closed when the app goes to the
   background and built again when it returns. Live stores stay bound to the
   closed storage, so flush them before closing and move them to the new one
-  with `rebindAll`, as in [Rebuilding a storage](#rebuilding-a-storage). A
-  directory inside the app's own container is not affected.
+  with `rebindAll`, then evict, as in
+  [Rebuilding a storage](#rebuilding-a-storage). A directory inside the
+  app's own container is not affected.
 - File names are the key in lowercase base32, so keys that differ only in
   case stay apart on macOS and Windows. A state key can be up to 144 bytes
   of UTF-8, which leaves room for its version key.

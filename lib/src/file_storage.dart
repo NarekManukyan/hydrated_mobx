@@ -50,8 +50,8 @@ import 'package:synchronized/synchronized.dart';
 /// a suspended app that holds a file lock in an app-group container, so
 /// close a storage kept there when the app goes to the background: call
 /// [HydratedMobX.flushAll] for it first, and when the app returns, build it
-/// again and move live stores over with [HydratedMobX.rebindAll]. Not
-/// available on the web.
+/// again without `maxAge` or `maxEntries`, move live stores over with
+/// [HydratedMobX.rebindAll], then [evict]. Not available on the web.
 /// {@endtemplate}
 class FileStorage implements UseTimeStorage {
   FileStorage._(
@@ -585,7 +585,9 @@ class FileStorage implements UseTimeStorage {
     final paths = [for (final key in unknown) _fileOf(key).path];
     final times = await Isolate.run(() => _modifiedTimes(paths));
     for (final (i, key) in unknown.indexed) {
-      if (times[i] case final time?) _usedAt[key] = time;
+      // [markUsed] does not wait for the lock, so a store may have used the
+      // key while the isolate ran: that time is newer than the file's.
+      if (times[i] case final time?) _usedAt.putIfAbsent(key, () => time);
     }
   }
 

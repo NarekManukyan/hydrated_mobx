@@ -76,7 +76,7 @@ const _kDemos = [
     'inspector',
     Icons.manage_search,
     'Storage inspector',
-    'Every key in every box, live',
+    'Every key in every storage, live',
     InspectorPage(),
   ),
   _Demo(

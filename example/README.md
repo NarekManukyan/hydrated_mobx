@@ -11,7 +11,7 @@ A Flutter app with one screen per `hydrated_mobx` feature area:
 | Schema migration | Seeding old data with `importData`; `migrate` upgrading or dropping it |
 | Eviction | A per-item cache bounded by `maxEntries` and `evictable` |
 | Observer & errors | Hydration, serialization and closed-storage errors in one log |
-| Storage inspector | Every key in every box, with delete and clear |
+| Storage inspector | Every key in every storage, with delete and clear |
 | Encryption | An AES-256 box; the note is not in the file as plain text |
 | trustToJson | Time per write of a 2000-row state, with and without it |
 | Large state | Notes kept gzipped in a box, moved to a `FileStorage` with `transferTokens`, opened with `preload` |

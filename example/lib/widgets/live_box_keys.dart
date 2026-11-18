@@ -7,8 +7,9 @@ import 'demo_page.dart';
 
 const _kRefresh = Duration(milliseconds: 500);
 
-/// The keys and values a box holds, re-read twice a second so writes,
-/// deletes and evictions show up as they happen.
+/// The keys a storage holds, and their values unless [showValues] is off,
+/// re-read twice a second so writes, deletes and evictions show up as they
+/// happen.
 class LiveBoxKeys extends StatefulWidget {
   const LiveBoxKeys({
     super.key,
