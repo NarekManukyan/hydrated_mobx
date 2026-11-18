@@ -321,7 +321,8 @@ it deletes. Only a storage built with `maxAge`, `maxEntries` or
 `trackUse: true` records use times, in a small companion box; other storages
 pay nothing for eviction. A key's use time is rewritten at most once per
 `useResolution` (a minute by default). Keys written before 2.0 count as used at
-the first 2.0 launch. Keep the eviction settings the same across launches:
+the first 2.0 launch, unless `initialUseTime` dates them from their stored
+value (see below). Keep the eviction settings the same across launches:
 keys written while use times were not tracked look as old as their last
 recorded use.
 
@@ -557,9 +558,13 @@ To write one from scratch, implement `Storage`: `read`, `write`, `delete`,
 `deleteAll`, `keys`, `clear` and `close`. `read` is synchronous, because stores
 hydrate in their constructor. From `clear`, call
 `HydratedMobX.suspendAll(storage: this)` before wiping, so no store writes its
-state back. Implement `UseTrackingStorage.markUsed` to take part in eviction,
-and `UseTimeStorage` (`usedAt`, `setUsedAt`) so that `moveTokens` and
-`transferTokens` keep each key's use time when they move its state.
+state back. If `deleteAll` or `clear` can wait behind other work (a lock, a
+queue), have `read` and `keys` treat a key as gone from the moment a delete or
+clear naming it is called; otherwise a store built in between hydrates state
+that is then deleted under it. Implement `UseTrackingStorage.markUsed` to take
+part in eviction, and `UseTimeStorage` (`usedAt`, `setUsedAt`) so that
+`moveTokens` and `transferTokens` keep each key's use time when they move its
+state.
 
 ### Rebuilding a storage
 
