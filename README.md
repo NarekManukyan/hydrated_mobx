@@ -341,7 +341,10 @@ await HydratedMobX.clearAll(
 The second step is best effort: if the app stops between the two calls, the
 attachments of the notes evicted then stay. To catch those too, match
 attachments against the notes still stored instead of against `evicted`
-(`!cache.keys.contains('note_$id')`).
+(`!cache.keys.contains('note_$id')`). Run
+`await HydratedMobX.flushAll(storage: cache)` first: a new note whose first
+write is still held back by `persistDelay` has no stored key yet, and its
+attachments would go with the evicted ones.
 
 `compactionStrategy` tunes when Hive rewrites the box file.
 
