@@ -254,6 +254,35 @@ void main() {
     await disk.close();
   });
 
+  test('importData replaces or keeps a value that does not decode', () async {
+    // Encoded bytes whose body is not JSON.
+    final hive = Hive..init(dir.path);
+    final box = await hive.openBox<dynamic>(HydratedStorage.defaultBoxName);
+    await box.put('bad', Uint8List.fromList([0x89, 0x48, 0x4d, 1, 0x7b]));
+    await box.close();
+    final disk = await build();
+
+    await HydratedMobX.importData(
+      {
+        'bad': {'count': 1},
+        'new': {'count': 2},
+      },
+      storage: disk,
+    );
+    expect(() => disk.read('bad'), throwsFormatException);
+    expect(disk.read('new'), {'count': 2});
+
+    await HydratedMobX.importData(
+      {
+        'bad': {'count': 1},
+      },
+      overwrite: true,
+      storage: disk,
+    );
+    expect(disk.read('bad'), {'count': 1});
+    await disk.close();
+  });
+
   test('encodeAbove is the largest size kept as a tree', () async {
     const state = {'k': 'v'}; // {"k":"v"}: 9 bytes
     var disk = await build(encodeAbove: 9);
