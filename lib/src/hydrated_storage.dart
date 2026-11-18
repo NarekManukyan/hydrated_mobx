@@ -236,8 +236,8 @@ class HydratedStorage implements UseTimeStorage {
   /// - [initialUseTime] gives keys that have no use time yet (state written
   ///   before tracking was turned on) one from their stored value, e.g. a
   ///   last-opened or created-at field, so the first eviction ranks them by
-  ///   it. Keys it returns `null` for count as used at build, and a time
-  ///   after now counts as now.
+  ///   it. Keys it returns `null` for, or throws for, count as used at
+  ///   build, and a time after now counts as now.
   /// - [encoding] keeps state of more than [encodeAbove] bytes of JSON as
   ///   bytes rather than as maps and lists, which Hive would hold decoded in
   ///   memory for as long as the box is open. Each read then decodes it.
@@ -348,6 +348,29 @@ class HydratedStorage implements UseTimeStorage {
 
   final _lock = Lock();
 
+  /// Keys a queued [deleteAll] or [clear] will remove, with how many queued
+  /// deletes name each. [read] and [keys] treat them as gone already, so a
+  /// store built while the delete waits for [_lock] does not hydrate a value
+  /// that is about to disappear.
+  final _deleting = <String, int>{};
+
+  /// Runs [delete] under [_lock] with [keys] hidden from [read] and [keys]
+  /// from now until it finishes.
+  Future<void> _hideWhile(
+    String operation,
+    List<String> keys,
+    Future<void> Function() delete,
+  ) {
+    for (final key in keys) {
+      _deleting.update(key, (n) => n + 1, ifAbsent: () => 1);
+    }
+    return _locked(operation, delete).whenComplete(() {
+      for (final key in keys) {
+        if (_deleting.update(key, (n) => n - 1) == 0) _deleting.remove(key);
+      }
+    });
+  }
+
   void _checkOpen(String operation) {
     if (!_box.isOpen) throw StorageClosedException(operation);
   }
@@ -369,13 +392,17 @@ class HydratedStorage implements UseTimeStorage {
   @override
   dynamic read(String key) {
     _checkOpen('read');
+    if (_deleting.containsKey(key)) return null;
     return _codec.decode(_box.get(key));
   }
 
   @override
   Iterable<String> get keys {
     _checkOpen('list keys');
-    return _box.keys.whereType<String>();
+    final keys = _box.keys.whereType<String>();
+    return _deleting.isEmpty
+        ? keys
+        : keys.where((key) => !_deleting.containsKey(key));
   }
 
   @override
@@ -394,8 +421,9 @@ class HydratedStorage implements UseTimeStorage {
     _checkOpen('delete');
     final list = keys.toList();
     if (list.isEmpty) return Future.value();
-    return _locked(
+    return _hideWhile(
       'delete',
+      list,
       () => Future.wait([
         _box.deleteAll(list),
         if (_meta case final meta?) meta.deleteAll(list),
@@ -409,7 +437,10 @@ class HydratedStorage implements UseTimeStorage {
     // Suspend this storage's live stores now, not when the lock frees up: a
     // write they queued meanwhile would land after the wipe.
     HydratedMobX.suspendAll(storage: this);
-    return _locked('clear', () async {
+    // Keys written after this call land after the wipe, so only the ones
+    // stored now are hidden.
+    return _hideWhile('clear', _box.keys.whereType<String>().toList(),
+        () async {
       await Future.wait([
         _box.clear(),
         if (_meta case final meta?) meta.clear(),
@@ -542,10 +573,21 @@ class HydratedStorage implements UseTimeStorage {
     // keep [_dueStamp] from recording one until then.
     int stampOf(DateTime? time) =>
         time == null ? now : min(time.millisecondsSinceEpoch, now);
+    DateTime? timeOf(String key) {
+      if (initialUseTime == null) return null;
+      try {
+        return initialUseTime(key, _readForStamp(key));
+      } on Object {
+        // A callback that fails for one value would otherwise fail every
+        // build, as the key stays untracked until it gets a time.
+        return null;
+      }
+    }
+
     final untracked = {
       for (final key in keys)
         if (!HydratedMobX.isVersionKey(key) && !meta.containsKey(key))
-          key: stampOf(initialUseTime?.call(key, _readForStamp(key))),
+          key: stampOf(timeOf(key)),
     };
     if (untracked.isNotEmpty) await meta.putAll(untracked);
   }
