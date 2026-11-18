@@ -39,9 +39,10 @@ bool isUseDue(
 /// The state keys among [keys] that `evict` deletes, given each one's
 /// [usedAt] (ms since epoch) and the time [now]: those not used for
 /// [olderThan], then all but the [maxEntries] most recently used of the
-/// rest. Version keys, keys [where] rejects and keys in [live] are never
-/// chosen and do not count towards [maxEntries]. [live] is read after
-/// [where] has run, which may itself have created a store.
+/// rest. Version keys, keys [where] rejects, keys in [live] and keys [gone]
+/// reports are never chosen and do not count towards [maxEntries]. [live]
+/// and [gone] are read after [where] has run, which may itself have created
+/// a store or queued a delete.
 @internal
 Set<String> evictionsAmong(
   Iterable<String> keys, {
@@ -51,6 +52,7 @@ Set<String> evictionsAmong(
   int? maxEntries,
   bool Function(String key)? where,
   Set<String> Function()? live,
+  bool Function(String key)? gone,
 }) {
   final accepted = [
     for (final key in keys)
@@ -59,7 +61,8 @@ Set<String> evictionsAmong(
   final spared = live?.call() ?? const <String>{};
   final candidates = [
     for (final key in accepted)
-      if (!spared.contains(key)) (key: key, usedAt: usedAt(key)),
+      if (!spared.contains(key) && !(gone?.call(key) ?? false))
+        (key: key, usedAt: usedAt(key)),
   ];
   final doomed = <String>{};
   if (olderThan != null) {

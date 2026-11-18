@@ -484,6 +484,7 @@ class HydratedStorage implements UseTimeStorage {
       maxEntries: maxEntries,
       where: where,
       live: keepLive ? () => HydratedMobX.liveTokens(storage: this) : null,
+      gone: _pending.hides,
     );
     if (doomed.isEmpty) return doomed;
     // The shared path: suspends live stores of doomed keys and deletes their

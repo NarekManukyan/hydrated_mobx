@@ -181,15 +181,19 @@ abstract class HydratedMobX with Store {
   ///   deleted. The next run, with B moved, finishes it;
   /// - a live store uses either token, since it would not see the move.
   ///
-  /// A version key left at the new token without its state is replaced.
+  /// When the new token already holds the same state under the same
+  /// version, only the old key is deleted; that is how an interrupted run
+  /// finishes. A version key left at the new token without its state is
+  /// replaced.
+  ///
   /// A key that fails, in [to] (by throwing or by returning a version key)
   /// or in its move, stays where it is, and the others still move. Each
   /// failure goes to [onError]; without it, the first one is rethrown once
   /// every key has been tried.
-  /// When the new token already holds the same state, the old key is
-  /// deleted; that is how an interrupted run finishes. Each move writes the
-  /// version, then the state, then deletes the old keys, so it is safe to run
-  /// again after a crash. Call it at startup, before constructing the stores.
+  ///
+  /// Each move writes the version, then the state, then deletes the old
+  /// keys, so it is safe to run again after a crash. Call it at startup,
+  /// before constructing the stores.
   static Future<Map<String, String>> moveTokens(
     String? Function(String token, Object? Function() value) to, {
     Storage? storage,
@@ -324,19 +328,19 @@ abstract class HydratedMobX with Store {
   /// ([UseTimeStorage]), its use time, e.g. per-document state from a Hive
   /// box into a `FileStorage`. Returns the tokens moved.
   ///
-  /// Each token is written to [to] (version, then state) before it is
-  /// deleted from [from], so a crash leaves it in one storage or both, never
-  /// in neither, and running again finishes the move. A token [to] already
-  /// holds with different state, or with the same state under another
-  /// version, stays in [from]; one it holds with the same state and version
-  /// is only deleted from [from]. Tokens of live stores bound to
-  /// either storage are skipped. Call it at startup, before constructing the
-  /// stores.
+  /// A token [to] already holds with different state, or with the same
+  /// state under another version, stays in [from]; one it holds with the
+  /// same state and version is only deleted from [from]. Tokens of live
+  /// stores bound to either storage are skipped.
   ///
   /// A token that fails, in [where] or in its move, stays in [from], and the
-  /// others still move.
-  /// Each failure goes to [onError]; without it, the first one is rethrown
-  /// once every token has been tried.
+  /// others still move. Each failure goes to [onError]; without it, the
+  /// first one is rethrown once every token has been tried.
+  ///
+  /// Each token is written to [to] (version, then state) before it is
+  /// deleted from [from], so a crash leaves it in one storage or both, never
+  /// in neither, and running again finishes the move. Call it at startup,
+  /// before constructing the stores.
   ///
   /// Throws an [ArgumentError] when [from] and [to] are the same storage,
   /// also when one wraps the other ([ForwardingStorage]): the move would
