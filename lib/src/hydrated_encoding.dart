@@ -33,7 +33,10 @@ const _magic = [0x89, 0x48, 0x4d]; // 0x89 'H' 'M'
 const _bytesFormat = 0;
 const _jsonFormat = 1;
 const _gzipFormat = 2;
-const _headerLength = 4;
+
+/// Where the format byte sits, right after [_magic].
+const _formatOffset = 3;
+const _headerLength = _formatOffset + 1;
 
 /// Writes UTF-8 JSON straight to bytes, without a `String` in between.
 final _toUtf8Json = JsonUtf8Encoder();
@@ -101,7 +104,7 @@ class HydratedValueCodec {
   static Uint8List _framed(int format, List<int> body) =>
       Uint8List(_headerLength + body.length)
         ..setAll(0, _magic)
-        ..[3] = format
+        ..[_formatOffset] = format
         ..setAll(_headerLength, body);
 
   /// [stored] decoded when it is an encoded value. Any other value is, for a
@@ -131,7 +134,7 @@ class HydratedValueCodec {
     final state = decode(stored);
     final wanted = encode(state);
     if (identical(wanted, state)) return format == null ? stored : state;
-    return format == (wanted! as Uint8List)[3] ? stored : wanted;
+    return format == (wanted! as Uint8List)[_formatOffset] ? stored : wanted;
   }
 
   /// The format byte of an encoded value, or `null` for any other value.
@@ -143,8 +146,8 @@ class HydratedValueCodec {
         stored[2] != _magic[2]) {
       return null;
     }
-    return switch (stored[3]) {
-      _jsonFormat || _gzipFormat => stored[3],
+    return switch (stored[_formatOffset]) {
+      _jsonFormat || _gzipFormat => stored[_formatOffset],
       _bytesFormat when _everyValue => _bytesFormat,
       _ => null,
     };
