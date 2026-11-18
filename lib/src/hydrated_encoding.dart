@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:hydrated_mobx/src/gzip/gzip.dart';
+import 'package:meta/meta.dart';
 
 /// How a storage keeps state.
 ///
@@ -40,7 +41,8 @@ final _toUtf8Json = JsonUtf8Encoder();
 /// intermediate `String`.
 final _fromUtf8Json = utf8.decoder.fuse(json.decoder);
 
-/// Turns state into what a storage keeps, and back. Internal.
+/// Turns state into what a storage keeps, and back.
+@internal
 class HydratedValueCodec {
   /// For a box: encodes maps and lists whose JSON is longer than
   /// [encodeAbove] bytes as [encoding] says, and keeps every other value as

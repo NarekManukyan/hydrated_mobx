@@ -200,6 +200,40 @@ void main() {
     expect(await raw('big'), isA<Uint8List>());
   });
 
+  test('state written after clear() still goes back to tree', () async {
+    var disk = await build();
+    await disk.write('old', _big());
+    await disk.clear();
+    await disk.write('big', _big());
+    await disk.close();
+
+    disk = await build(encoding: HydratedEncoding.tree);
+    await disk.close();
+
+    expect(await raw('big'), isA<Map<dynamic, dynamic>>());
+  });
+
+  test('a value that does not decode does not stop the box opening', () async {
+    var disk = await build();
+    await disk.write('big', _big());
+    await disk.close();
+    // Encoded bytes whose body is not JSON.
+    final hive = Hive..init(dir.path);
+    final box = await hive.openBox<dynamic>(HydratedStorage.defaultBoxName);
+    await box.put('bad', Uint8List.fromList([0x89, 0x48, 0x4d, 1, 0x7b]));
+    await box.close();
+
+    disk = await HydratedStorage.build(
+      storageDirectory: HydratedStorageDirectory(dir.path),
+      encoding: HydratedEncoding.gzipJson,
+      trackUse: true,
+      initialUseTime: (_, __) => null,
+    );
+    expect(disk.read('big'), _big());
+    expect(() => disk.read('bad'), throwsFormatException);
+    await disk.close();
+  });
+
   test('encodeAbove is the largest size kept as a tree', () async {
     const state = {'k': 'v'}; // {"k":"v"}: 9 bytes
     var disk = await build(encodeAbove: 9);
