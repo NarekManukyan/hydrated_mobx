@@ -36,28 +36,35 @@ bool isUseDue(
     !HydratedMobX.isVersionKey(key) &&
     (last == null || now - last >= resolution.inMilliseconds);
 
-/// The state keys among [keys] that `evict` deletes, given each one's
-/// [usedAt] (ms since epoch) and the time [now]: those not used for
-/// [olderThan], then all but the [maxEntries] most recently used of the
-/// rest. Version keys, keys [where] rejects, keys in [live] and keys [gone]
-/// reports are never chosen and do not count towards [maxEntries]. [live]
-/// and [gone] are read after [where] has run, which may itself have created
-/// a store or queued a delete.
+/// The state keys among [keys] that `evict` may delete: not version keys,
+/// and accepted by [where].
+@internal
+List<String> evictionCandidates(
+  Iterable<String> keys,
+  bool Function(String key)? where,
+) =>
+    [
+      for (final key in keys)
+        if (!HydratedMobX.isVersionKey(key) && (where?.call(key) ?? true)) key,
+    ];
+
+/// The keys among [accepted] (from [evictionCandidates]) that `evict`
+/// deletes, given each one's [usedAt] (ms since epoch) and the time [now]:
+/// those not used for [olderThan], then all but the [maxEntries] most
+/// recently used of the rest. Keys in [live] and keys [gone] reports are
+/// never chosen and do not count towards [maxEntries]. Read [live] and
+/// [gone] after [evictionCandidates] has run, since its `where` may itself
+/// have created a store or queued a delete.
 @internal
 Set<String> evictionsAmong(
-  Iterable<String> keys, {
+  List<String> accepted, {
   required int Function(String key) usedAt,
   required int now,
   Duration? olderThan,
   int? maxEntries,
-  bool Function(String key)? where,
   Set<String> Function()? live,
   bool Function(String key)? gone,
 }) {
-  final accepted = [
-    for (final key in keys)
-      if (!HydratedMobX.isVersionKey(key) && (where?.call(key) ?? true)) key,
-  ];
   final spared = live?.call() ?? const <String>{};
   final candidates = [
     for (final key in accepted)

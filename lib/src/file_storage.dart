@@ -550,11 +550,7 @@ class FileStorage implements UseTimeStorage {
       // [keys] leaves out the keys a queued delete hides, as
       // `HydratedStorage.evict` does: they are going anyway, and must not
       // take a place [maxEntries] keeps.
-      final accepted = [
-        for (final key in keys)
-          if (!HydratedMobX.isVersionKey(key) && (where?.call(key) ?? true))
-            key,
-      ];
+      final accepted = evictionCandidates(keys, where);
       await _loadUseTimes(accepted);
       return evictionsAmong(
         accepted,

@@ -483,12 +483,11 @@ class HydratedStorage implements UseTimeStorage {
     await _locked('evict', () async {});
     final now = _clock().millisecondsSinceEpoch;
     final doomed = evictionsAmong(
-      keys,
+      evictionCandidates(keys, where),
       usedAt: (key) => _usedAt(meta, key) ?? now,
       now: now,
       olderThan: olderThan,
       maxEntries: maxEntries,
-      where: where,
       live: keepLive ? () => HydratedMobX.liveTokens(storage: this) : null,
       gone: _pending.hides,
     );

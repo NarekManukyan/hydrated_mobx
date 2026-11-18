@@ -751,6 +751,20 @@ void main(List<String> args) {
     );
   });
 
+  test('a build that fails releases the directory', () async {
+    var disk = await build();
+    await disk.write('a', 1);
+    await disk.close();
+
+    await expectLater(
+      build(maxEntries: 0, evictable: (_) => throw StateError('evictable')),
+      throwsStateError,
+    );
+    disk = await build();
+    expect(disk.keys, ['a']);
+    await disk.close();
+  });
+
   test('build rejects the web directory and a negative cacheBytes', () {
     expect(
       () => FileStorage.build(storageDirectory: HydratedStorageDirectory.web),
