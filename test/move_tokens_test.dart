@@ -124,6 +124,28 @@ void main() {
       expect(storage.keys.toSet(), {'a', 'b'});
     });
 
+    test('a key whose new token is moving away waits for the next run',
+        () async {
+      final storage = InMemoryStorage({
+        'a': {'count': 1},
+        'b': {'count': 1},
+      });
+      String? to(String token, Object? Function() _) =>
+          {'a': 'b', 'b': 'c'}[token];
+
+      expect(
+        await HydratedMobX.moveTokens(to, storage: storage),
+        {'b': 'c'},
+      );
+      expect(storage.keys.toSet(), {'a', 'c'});
+
+      expect(
+        await HydratedMobX.moveTokens(to, storage: storage),
+        {'a': 'b'},
+      );
+      expect(storage.keys.toSet(), {'b', 'c'});
+    });
+
     test('skips tokens of live stores', () async {
       final storage = InMemoryStorage({
         'old': {'count': 1},

@@ -38,7 +38,7 @@ class LegacyStore {
   final RegExp? idPattern;
 
   /// Whether [value] has the shape of this store's state.
-  bool owns(Object? value) {
+  bool _owns(Object? value) {
     if (value is! Map) return false;
     final required = requiredFields ?? fields.take(1);
     return required.every(value.containsKey) &&
@@ -78,8 +78,10 @@ abstract final class LegacyTokens {
   ///
   /// Both ways require the value to have the store's shape, and for a keyed
   /// store the rest of the key to be an id [LegacyStore.idPattern] accepts,
-  /// so a name this build gave to a different class never moves one store's
-  /// state onto another, or onto a token no store reads. Keys starting with
+  /// or nothing: a key without an id moves to the store's [LegacyStore.prefix]
+  /// alone, the token of that store built without a `storeId`. So a name
+  /// this build gave to a different class never moves one listed store's
+  /// state onto another. Keys starting with
   /// a store's current prefix or one of [reservedPrefixes] are never read or
   /// moved.
   static String? Function(String token, Object? Function() value) match(
@@ -115,7 +117,7 @@ abstract final class LegacyTokens {
       final value = read();
       final candidates = [
         for (final store in stores)
-          if (store.owns(value)) store,
+          if (store._owns(value)) store,
       ];
       for (final store in candidates) {
         final legacy = store.legacyPrefix;
