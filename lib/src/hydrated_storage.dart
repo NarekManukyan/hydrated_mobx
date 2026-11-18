@@ -407,12 +407,15 @@ class HydratedStorage implements UseTrackingStorage {
     // just now could be judged by its previous use time.
     await _locked('evict', () async {});
     final now = _clock().millisecondsSinceEpoch;
+    final accepted = [
+      for (final key in keys)
+        if (!HydratedMobX.isVersionKey(key) && (where?.call(key) ?? true)) key,
+    ];
+    // After [where], which may itself create a store to look at a key.
     final live = keepLive ? HydratedMobX.liveTokens(storage: this) : null;
     final candidates = [
-      for (final key in keys)
-        if (!HydratedMobX.isVersionKey(key) &&
-            !(live?.contains(key) ?? false) &&
-            (where?.call(key) ?? true))
+      for (final key in accepted)
+        if (!(live?.contains(key) ?? false))
           (key: key, usedAt: _usedAt(meta, key) ?? now),
     ];
     final doomed = <String>{};
