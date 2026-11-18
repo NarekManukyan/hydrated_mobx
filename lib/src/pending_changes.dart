@@ -44,21 +44,42 @@ class PendingChanges {
     return write == null || write.call < deleted;
   }
 
-  /// Whether [key] is to be read as the value of its queued write, from
-  /// [stored].
-  bool shows(String key) {
+  /// Whether [key] is to be read as the value of its queued write.
+  bool _shows(String key) {
     final write = _writes[key];
     if (write == null) return false;
     final deleted = _deletedAt(key);
     return deleted == null || write.call > deleted;
   }
 
-  /// The value of the latest queued write of [key], in the form the storage
-  /// keeps it. Only meaningful when [shows] is true.
-  Object? stored(String key) => _writes[key]?.stored;
+  /// [key] as a read sees it: the value of its queued write, through
+  /// [decode] from the form the storage keeps it; `null` when a queued
+  /// delete or clear hides it; or else what [fromStorage] reads.
+  Object? read(
+    String key, {
+    required Object? Function(Object? stored) decode,
+    required Object? Function() fromStorage,
+  }) {
+    if (_shows(key)) return decode(_writes[key]!.stored);
+    if (hides(key)) return null;
+    return fromStorage();
+  }
 
-  /// The keys of queued writes, some of which may be hidden again.
-  Iterable<String> get written => _writes.keys;
+  /// [stored], the keys the storage holds, as a read sees them: without
+  /// those a queued delete or clear hides, and with those only a queued
+  /// write adds. [holds] says whether the storage holds a key.
+  Iterable<String> keys(
+    Iterable<String> stored, {
+    required bool Function(String key) holds,
+  }) {
+    if (isEmpty) return stored;
+    return [
+      for (final key in stored)
+        if (!hides(key)) key,
+      for (final key in _writes.keys)
+        if (_shows(key) && !holds(key)) key,
+    ];
+  }
 
   /// Shows [key] as [stored] from now until [body], the storage's write,
   /// finishes, however it ends: after a failure, reads see what the storage

@@ -348,8 +348,16 @@ class FileStorage implements UseTimeStorage {
   @override
   dynamic read(String key) {
     _checkOpen('read');
-    if (_pending.shows(key)) return _codec.decode(_pending.stored(key));
-    if (!_keys.contains(key) || _pending.hides(key)) return null;
+    return _pending.read(
+      key,
+      decode: _codec.decode,
+      fromStorage: () => _readFile(key),
+    );
+  }
+
+  /// The value [key]'s file holds, from the cache when it is there.
+  Object? _readFile(String key) {
+    if (!_keys.contains(key)) return null;
     var bytes = _cache.remove(key);
     if (bytes != null) {
       _cache[key] = bytes; // Most recently used now.
@@ -368,13 +376,8 @@ class FileStorage implements UseTimeStorage {
   @override
   Iterable<String> get keys {
     _checkOpen('list keys');
-    if (_pending.isEmpty) return _keys.toList();
-    return [
-      for (final key in _keys)
-        if (!_pending.hides(key)) key,
-      for (final key in _pending.written)
-        if (_pending.shows(key) && !_keys.contains(key)) key,
-    ];
+    // A copy, so callers may delete while they go through it.
+    return _pending.keys(_keys.toList(), holds: _keys.contains);
   }
 
   @override

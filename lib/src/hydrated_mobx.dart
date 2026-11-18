@@ -300,7 +300,8 @@ abstract class HydratedMobX with Store {
         await target.write(to, value);
       } catch (_) {
         // A version key on its own would date state written there later.
-        await target.deleteAll([to, toVersion]).catchError((Object _) {});
+        await Future.sync(() => target.deleteAll([to, toVersion]))
+            .catchError((Object _) {});
         rethrow;
       }
       await _carryUseTime(source, from, target, to);

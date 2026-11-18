@@ -120,6 +120,26 @@ void main() {
     expect(await raw('bytes'), bytes);
   });
 
+  test('bytes that start like an encoded value stay as they are', () async {
+    // The magic bytes with the format byte only a file storage writes, and
+    // a PNG header, which shares the first magic byte.
+    final header = Uint8List.fromList([0x89, 0x48, 0x4d, 0, 1, 2]);
+    final png = Uint8List.fromList([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]);
+    for (final encoding in [HydratedEncoding.json, HydratedEncoding.gzipJson]) {
+      final disk = await build(encoding: encoding);
+      await disk.write('header', header);
+      await disk.write('png', png);
+      await disk.close();
+
+      expect(await raw('header'), header);
+      expect(await raw('png'), png);
+      final reopened = await build(encoding: encoding);
+      expect(reopened.read('header'), header);
+      expect(reopened.read('png'), png);
+      await reopened.close();
+    }
+  });
+
   test('state JSON cannot hold stays a tree', () async {
     final disk = await build(encodeAbove: 0);
     await disk.write('intKeys', {1: 'a'});

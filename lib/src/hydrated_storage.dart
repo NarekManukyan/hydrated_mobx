@@ -382,22 +382,20 @@ class HydratedStorage implements UseTimeStorage {
   @override
   dynamic read(String key) {
     _checkOpen('read');
-    if (_pending.shows(key)) return _codec.decode(_pending.stored(key));
-    if (_pending.hides(key)) return null;
-    return _codec.decode(_box.get(key));
+    return _pending.read(
+      key,
+      decode: _codec.decode,
+      fromStorage: () => _codec.decode(_box.get(key)),
+    );
   }
 
   @override
   Iterable<String> get keys {
     _checkOpen('list keys');
-    final keys = _box.keys.whereType<String>();
-    if (_pending.isEmpty) return keys;
-    return [
-      for (final key in keys)
-        if (!_pending.hides(key)) key,
-      for (final key in _pending.written)
-        if (_pending.shows(key) && !_box.containsKey(key)) key,
-    ];
+    return _pending.keys(
+      _box.keys.whereType<String>(),
+      holds: _box.containsKey,
+    );
   }
 
   @override

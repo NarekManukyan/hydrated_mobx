@@ -52,7 +52,39 @@ class _VanishingStorage extends ForwardingStorage {
   dynamic read(String key) => gone.contains(key) ? null : super.read(key);
 }
 
+/// Fails every write, and throws from `deleteAll` before returning a future.
+class _BrokenStorage extends ForwardingStorage {
+  _BrokenStorage(super.inner);
+
+  @override
+  Future<void> write(String key, dynamic value) =>
+      Future.error(StateError('write failed'));
+
+  @override
+  Future<void> deleteAll(Iterable<String> keys) =>
+      throw StateError('delete failed');
+}
+
 void main() {
+  test('a failed move reports the write that failed', () async {
+    final from = InMemoryStorage({
+      'a': {'count': 1},
+    });
+    final errors = <Object>[];
+    final moved = await HydratedMobX.transferTokens(
+      from: from,
+      to: _BrokenStorage(InMemoryStorage()),
+      where: (_) => true,
+      onError: (_, error, __) => errors.add(error),
+    );
+
+    expect(moved, isEmpty);
+    expect(errors, [
+      isA<StateError>().having((e) => e.message, 'message', 'write failed'),
+    ]);
+    expect(from.read('a'), {'count': 1});
+  });
+
   group('moveTokens', () {
     test('moves state with its version key and returns the moves', () async {
       final storage = InMemoryStorage({
