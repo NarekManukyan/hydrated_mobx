@@ -9,7 +9,9 @@ import 'package:hive_ce/hive.dart';
 // single major (`hive_ce: ^2`) to bound exposure to internal changes.
 // ignore: implementation_imports
 import 'package:hive_ce/src/hive_impl.dart';
+import 'package:hydrated_mobx/src/gzip/gzip.dart';
 import 'package:hydrated_mobx/src/hydrated_cipher.dart';
+import 'package:hydrated_mobx/src/hydrated_encoding.dart';
 import 'package:hydrated_mobx/src/hydrated_mobx.dart';
 import 'package:meta/meta.dart';
 import 'package:synchronized/synchronized.dart';
@@ -159,8 +161,10 @@ class HydratedStorage implements UseTrackingStorage {
     this._meta, {
     required DateTime Function() clock,
     Duration useResolution = defaultUseResolution,
+    HydratedValueCodec codec = const HydratedValueCodec(HydratedEncoding.tree),
   })  : _clock = clock,
-        _useResolution = useResolution;
+        _useResolution = useResolution,
+        _codec = codec;
 
   /// The box name used when none is given to [build].
   static const defaultBoxName = 'hydrated_box';
@@ -170,6 +174,9 @@ class HydratedStorage implements UseTrackingStorage {
 
   /// How often a key's use time is rewritten at most, by default.
   static const defaultUseResolution = Duration(minutes: 1);
+
+  /// The `encodeAbove` used when none is given to [build].
+  static const defaultEncodeAbove = 16 * 1024;
 
   /// Returns an instance of [HydratedStorage].
   ///
@@ -201,6 +208,13 @@ class HydratedStorage implements UseTrackingStorage {
   ///   before tracking was turned on) one from their stored value, e.g. a
   ///   last-opened or created-at field, so the first eviction ranks them by
   ///   it. Keys it returns `null` for count as used at build.
+  /// - [encoding] keeps state of at least [encodeAbove] bytes of JSON as
+  ///   bytes rather than as maps and lists, which Hive would hold decoded in
+  ///   memory for as long as the box is open. Each read then decodes it. State
+  ///   already in the box is converted at build, and either way any value
+  ///   reads back, so the setting can change between launches. A box with
+  ///   encoded values must not be opened by hydrated_mobx before 2.1: it
+  ///   would fail to hydrate them, and overwrite them.
   /// - [compactionStrategy] overrides when Hive rewrites the box file.
   static Future<HydratedStorage> build({
     required HydratedStorageDirectory storageDirectory,
@@ -212,9 +226,17 @@ class HydratedStorage implements UseTrackingStorage {
     bool trackUse = false,
     Duration useResolution = defaultUseResolution,
     DateTime? Function(String key, dynamic value)? initialUseTime,
+    HydratedEncoding encoding = HydratedEncoding.tree,
+    int encodeAbove = defaultEncodeAbove,
     HydratedCompactionStrategy? compactionStrategy,
     @visibleForTesting DateTime Function() clock = DateTime.now,
   }) {
+    if (encoding == HydratedEncoding.gzipJson && !gzipSupported) {
+      throw UnsupportedError('gzipJson is not available on this platform');
+    }
+    if (encodeAbove < 0) {
+      throw ArgumentError.value(encodeAbove, 'encodeAbove', 'must be >= 0');
+    }
     if (maxAge != null && maxAge.isNegative) {
       throw ArgumentError.value(maxAge, 'maxAge', 'must not be negative');
     }
@@ -252,8 +274,10 @@ class HydratedStorage implements UseTrackingStorage {
         tracks ? boxes.last : null,
         clock: clock,
         useResolution: useResolution,
+        codec: HydratedValueCodec(encoding, encodeAbove: encodeAbove),
       );
       try {
+        await storage._encodeStored();
         await storage._stampUntracked(initialUseTime);
         if (maxAge != null || maxEntries != null) {
           await storage.evict(
@@ -285,6 +309,7 @@ class HydratedStorage implements UseTrackingStorage {
 
   final DateTime Function() _clock;
   final Duration _useResolution;
+  final HydratedValueCodec _codec;
 
   final _lock = Lock();
 
@@ -309,7 +334,7 @@ class HydratedStorage implements UseTrackingStorage {
   @override
   dynamic read(String key) {
     _checkOpen('read');
-    return _box.get(key);
+    return HydratedValueCodec.decode(_box.get(key));
   }
 
   @override
@@ -322,7 +347,7 @@ class HydratedStorage implements UseTrackingStorage {
   Future<void> write(String key, dynamic value) {
     return _locked(
       'write',
-      () => Future.wait([_box.put(key, value), _stamp(key)]),
+      () => Future.wait([_box.put(key, _codec.encode(value)), _stamp(key)]),
     );
   }
 
@@ -440,6 +465,19 @@ class HydratedStorage implements UseTrackingStorage {
     return value is int ? value : null;
   }
 
+  /// Rewrites state still kept as a tree in the form [_codec] keeps it, so
+  /// the memory it takes drops now rather than at its next change.
+  Future<void> _encodeStored() async {
+    if (_codec.encoding == HydratedEncoding.tree) return;
+    final converted = <String, Object?>{};
+    for (final key in keys) {
+      final value = _box.get(key);
+      final encoded = _codec.encode(value);
+      if (!identical(encoded, value)) converted[key] = encoded;
+    }
+    if (converted.isNotEmpty) await _box.putAll(converted);
+  }
+
   /// Gives every key without a use time one, so state written before
   /// eviction metadata existed is aged from [initialUseTime], or from now,
   /// rather than evicted at once.
@@ -452,9 +490,7 @@ class HydratedStorage implements UseTrackingStorage {
     final untracked = {
       for (final key in keys)
         if (!HydratedMobX.isVersionKey(key) && !meta.containsKey(key))
-          key: initialUseTime
-                  ?.call(key, _box.get(key))
-                  ?.millisecondsSinceEpoch ??
+          key: initialUseTime?.call(key, read(key))?.millisecondsSinceEpoch ??
               now,
     };
     if (untracked.isNotEmpty) await meta.putAll(untracked);

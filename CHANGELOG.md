@@ -18,6 +18,13 @@
 - `LegacyTokens.match([LegacyStore(...)])` finds 1.x `runtimeType` keys, by
   type name or, in obfuscated builds, by the shape of the stored JSON, for
   `moveTokens`.
+- `HydratedStorage.build(encoding:, encodeAbove:)` keeps state of at least
+  `encodeAbove` bytes (16 KB by default) as UTF-8 JSON
+  (`HydratedEncoding.json`) or gzipped JSON (`HydratedEncoding.gzipJson`)
+  instead of decoded maps and lists. For 200 note-sized states that is 142 MB
+  of heap with `tree`, 25 MB with `json` and 2.4 MB with `gzipJson`. Existing
+  state is converted at build. Versions before 2.1 cannot read an encoded box.
+- `benchmark/memory_benchmark.dart`.
 
 ## [2.0.0] - 2026-10-29
 

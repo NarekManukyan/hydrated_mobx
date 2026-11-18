@@ -30,6 +30,8 @@ The screens come from the [example app](example), one per feature.
   each store bound to the one it belongs in.
 - **Targeted clearing:** `clearAll(where:)` deletes only the tokens you name, in
   one operation, and stops their stores first.
+- **Memory:** `encoding: HydratedEncoding.gzipJson` keeps large state as
+  bytes, not decoded trees, until a store hydrates it.
 - **Eviction:** `maxAge` and `maxEntries` keep per-id caches from growing
   forever.
 - **Schema versions:** `version` + `migrate`, which can also drop old data.
@@ -49,6 +51,16 @@ The screens come from the [example app](example), one per feature.
 | Re-creating a hydrated store 100 times | 100 writes | **0** writes |
 | One change to a 2000-row state, time blocking the caller | 1.15 ms | 0.97 ms, **0.41 ms** with `trustToJson` |
 | 500 per-id cache keys | kept forever | **50** kept with `maxEntries: 50` |
+
+`benchmark/memory_benchmark.dart` measures what an open box costs in memory.
+200 note-sized states (900 transcript segments each, 28.7 MB of JSON), none of
+them hydrated:
+
+| `encoding` | Heap held | File | Open | Read, per note |
+| --- | --- | --- | --- | --- |
+| `tree` (default) | 142.4 MB | 34.9 MB | 262 ms | 0 ms |
+| `json` | 24.8 MB | 28.7 MB | 89 ms | 0.57 ms |
+| `gzipJson` | **2.4 MB** | 4.0 MB | 21 ms | 0.68 ms |
 
 ## Getting started
 
@@ -337,6 +349,35 @@ await HydratedMobX.clearAll(
 ```
 
 `compactionStrategy` tunes when Hive rewrites the box file.
+
+## Memory
+
+Hive keeps every value of an open box in memory, decoded, for as long as the
+box is open, whether or not a store ever reads it. A decoded JSON tree takes
+about five times the memory of its text, so a box of large per-id states (one
+per document, say) can cost hundreds of MB at launch. `encoding` keeps large
+state as bytes instead and decodes it when a store hydrates:
+
+```dart
+final documents = await HydratedStorage.build(
+  storageDirectory: directory,
+  boxName: 'documents',
+  encoding: HydratedEncoding.gzipJson,
+  encodeAbove: 16 * 1024, // smaller state stays as it is (the default)
+);
+```
+
+- `tree` (the default) keeps maps and lists as they are.
+- `json` keeps UTF-8 JSON, about a fifth of the memory.
+- `gzipJson` keeps gzipped JSON, a few percent of it, and a much smaller file.
+  It is not available on the web.
+
+Each `read` decodes again, so a store's hydration costs a fraction of a
+millisecond per 100 KB. State already in the box is converted when the storage
+is built, and every value reads back whatever the setting, so it can change
+between launches. Do not let a version of hydrated_mobx before 2.1 open an
+encoded box: it cannot read the encoded values, and its stores would overwrite
+them.
 
 ## Schema versions
 
