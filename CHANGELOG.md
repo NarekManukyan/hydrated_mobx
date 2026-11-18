@@ -2,28 +2,36 @@
 
 ## Unreleased
 
+### Changed
+
+- `HydratedStorage.evict()` returns `Future<Set<String>>`, the state keys it
+  deleted, instead of `Future<void>`, so state kept beside them under other
+  keys can be deleted too. Callers compile as before, but an override, a
+  fake or a mock of `evict` must now return the set (for mocktail,
+  `thenAnswer((_) async => <String>{})`).
+
 ### Added
 
-- `HydratedStorage.evict()` returns the state keys it deleted, so state kept
-  beside them under other keys can be deleted too.
 - `evict(keepLive: true)` spares the keys of live stores; they do not count
   towards `maxEntries`.
 - `HydratedMobX.liveTokens({storage})` lists the tokens of live stores.
 - `HydratedStorage.build(initialUseTime:)` dates keys that have no use time
   yet from their stored value, so the first eviction after turning tracking
-  on ranks them instead of treating all of them as used at that launch.
+  on ranks them instead of treating all of them as used at that launch. A
+  time after the build counts as the build time.
 - `HydratedMobX.moveTokens(to)` moves stored state to new tokens, with its
   version key, without overwriting anything, and safe to run again after a
   crash.
 - `LegacyTokens.match([LegacyStore(...)])` finds 1.x `runtimeType` keys, by
   type name or, in obfuscated builds, by the shape of the stored JSON, for
   `moveTokens`.
-- `HydratedStorage.build(encoding:, encodeAbove:)` keeps state of at least
+- `HydratedStorage.build(encoding:, encodeAbove:)` keeps state of more than
   `encodeAbove` bytes (16 KB by default) as UTF-8 JSON
   (`HydratedEncoding.json`) or gzipped JSON (`HydratedEncoding.gzipJson`)
   instead of decoded maps and lists. For 200 note-sized states that is 142 MB
-  of heap with `tree`, 25 MB with `json` and 2.4 MB with `gzipJson`. Existing
-  state is converted at build. Versions before 2.1 cannot read an encoded box.
+  of heap with `tree`, 25 MB with `json` and 2.4 MB with `gzipJson`. The first
+  build after either setting changes converts the state already in the box,
+  back to `tree` too. Versions before 2.1 cannot read an encoded box.
 - `benchmark/memory_benchmark.dart`.
 
 ## [2.0.0] - 2026-10-29

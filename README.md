@@ -341,12 +341,19 @@ final evicted = await cache.evict(
   keepLive: true,
   where: (key) => key.startsWith('note_') && !hasUnsyncedEdits(key),
 );
+const attachments = 'attachments_';
 await HydratedMobX.clearAll(
   storage: cache,
   where: (token) =>
-      evicted.contains(token.replaceFirst('attachments_', 'note_')),
+      token.startsWith(attachments) &&
+      evicted.contains('note_${token.substring(attachments.length)}'),
 );
 ```
+
+The second step is best effort: if the app stops between the two calls, the
+attachments of the notes evicted then stay. To catch those too, match
+attachments against the notes still stored instead of against `evicted`
+(`!cache.keys.contains('note_$id')`).
 
 `compactionStrategy` tunes when Hive rewrites the box file.
 
@@ -363,7 +370,7 @@ final documents = await HydratedStorage.build(
   storageDirectory: directory,
   boxName: 'documents',
   encoding: HydratedEncoding.gzipJson,
-  encodeAbove: 16 * 1024, // smaller state stays as it is (the default)
+  encodeAbove: 16 * 1024, // state up to this size stays as it is (the default)
 );
 ```
 
@@ -373,11 +380,14 @@ final documents = await HydratedStorage.build(
   It is not available on the web.
 
 Each `read` decodes again, so a store's hydration costs a fraction of a
-millisecond per 100 KB. State already in the box is converted when the storage
-is built, and every value reads back whatever the setting, so it can change
-between launches. Do not let a version of hydrated_mobx before 2.1 open an
-encoded box: it cannot read the encoded values, and its stores would overwrite
-them.
+millisecond per 100 KB. Every value reads back whatever the setting, so it can
+change between launches. The first build after `encoding` or `encodeAbove`
+changes converts what is already in the box, back to `tree` too; later builds
+skip that walk. A live store also keeps the decoded state it last hydrated or
+wrote, to skip unchanged writes, so encoding saves the memory of state whose
+store does not exist, not of the one on screen. Do not let a version of
+hydrated_mobx before 2.1 open an encoded box: it cannot read the encoded
+values, and its stores would overwrite them.
 
 ## Schema versions
 
@@ -497,6 +507,11 @@ the keys it deletes, and only once they are bound to the new storage.
 - `HydratedStorage` keeps its box in memory, which is what makes `read`
   synchronous. Keep caches bounded with eviction rather than storing
   everything in one box.
+- With `encoding`, every write of a map or list encodes it to UTF-8 JSON to
+  learn its size, and state up to `encodeAbove` then stays a tree. That is at
+  most `encodeAbove` bytes of encoding per write (about 60 µs for 16 KB, AOT
+  on an M4 Pro). Larger state is kept as those bytes, gzipped for
+  `gzipJson`, and every `read` of it decodes them.
 - hive_ce's `IsolatedHive` is not used: its reads are asynchronous, which a
   constructor-time hydration cannot wait for, and every write would still copy
   the whole state to the other isolate from the calling one.
@@ -554,12 +569,12 @@ await HydratedMobX.moveTokens(LegacyTokens.match([
   LegacyStore(
     prefix: 'user',
     legacyPrefix: '$UserStore',
-    keys: ['currentUser', 'settings'],
+    fields: ['currentUser', 'settings'],
   ),
   LegacyStore(
     prefix: 'chat_',
     legacyPrefix: '$ChatStore',
-    keys: ['messages'],
+    fields: ['messages'],
     idPattern: RegExp('[0-9a-f]{32}'), // one key per chat id
   ),
 ]));
@@ -572,9 +587,19 @@ exactly one store. A name the obfuscator gave to another class never moves one
 store's state onto another, because the shape has to fit either way.
 
 `moveTokens` takes any `(token, value) => newToken?`, so it also handles a
-renamed `storagePrefix`. It moves the version key along, never overwrites
-different state, skips tokens of live stores, and can run again after a crash.
-It returns the moves it made.
+renamed `storagePrefix`. `value` is a function that reads the stored value, so
+keys rejected by name are never read:
+
+```dart
+await HydratedMobX.moveTokens(
+  (token, value) =>
+      token.startsWith('todo-') ? 'todo_${token.substring(5)}' : null,
+);
+```
+
+It moves the version key along, never overwrites different state, skips
+tokens of live stores, and can run again after a crash. It returns the moves
+it made.
 
 ## More
 

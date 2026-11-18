@@ -32,6 +32,18 @@ class _Notes extends HydratedMobX with Store {
       _lines.value = (json['lines'] as List<dynamic>).cast<String>();
 }
 
+class _CountingStorage extends ForwardingStorage {
+  _CountingStorage(super.inner);
+
+  int writes = 0;
+
+  @override
+  Future<void> write(String key, dynamic value) {
+    if (!HydratedMobX.isVersionKey(key)) writes++;
+    return super.write(key, value);
+  }
+}
+
 Map<String, dynamic> _big([String word = 'transcript']) => {
       'segments': [
         for (var i = 0; i < 500; i++)
@@ -132,17 +144,73 @@ void main() {
     expect(await raw('small'), {'count': 1});
   });
 
-  test('encoded state still reads after going back to tree', () async {
+  test('going back to tree decodes encoded state at build', () async {
     var disk = await build();
     await disk.write('big', _big());
     await disk.close();
 
     disk = await build(encoding: HydratedEncoding.tree);
     expect(disk.read('big'), _big());
-    await disk.write('big', _big('edited'));
     await disk.close();
 
     expect(await raw('big'), isA<Map<dynamic, dynamic>>());
+  });
+
+  test('a new encoding re-encodes state kept in the old one', () async {
+    var disk = await build();
+    await disk.write('big', _big());
+    await disk.close();
+    expect(((await raw('big'))! as Uint8List)[3], 1);
+
+    disk = await build(encoding: HydratedEncoding.gzipJson);
+    expect(disk.read('big'), _big());
+    await disk.close();
+
+    expect(((await raw('big'))! as Uint8List)[3], 2);
+  });
+
+  test('a raised encodeAbove turns state below it back into a tree', () async {
+    var disk = await build();
+    await disk.write('big', _big());
+    await disk.close();
+
+    disk = await build(encodeAbove: 1 << 20);
+    await disk.close();
+
+    expect(await raw('big'), isA<Map<dynamic, dynamic>>());
+  });
+
+  test('state is converted once per setting, not at every build', () async {
+    var disk = await build();
+    await disk.close();
+    // A tree written behind the storage's back is left alone while the
+    // setting stays the same, which shows no build walks the box again.
+    final hive = Hive..init(dir.path);
+    final box = await hive.openBox<dynamic>(HydratedStorage.defaultBoxName);
+    await box.put('big', _big());
+    await box.close();
+
+    disk = await build();
+    await disk.close();
+    expect(await raw('big'), isA<Map<dynamic, dynamic>>());
+
+    disk = await build(encoding: HydratedEncoding.gzipJson);
+    expect(disk.keys, ['big']);
+    await disk.close();
+    expect(await raw('big'), isA<Uint8List>());
+  });
+
+  test('encodeAbove is the largest size kept as a tree', () async {
+    const state = {'k': 'v'}; // {"k":"v"}: 9 bytes
+    var disk = await build(encodeAbove: 9);
+    await disk.write('at', state);
+    await disk.close();
+    expect(await raw('at'), state);
+
+    disk = await build(encodeAbove: 8);
+    await disk.write('over', state);
+    await disk.close();
+    expect(await raw('over'), isA<Uint8List>());
   });
 
   test('a store hydrates from encoded state, with its version key', () async {
@@ -155,12 +223,19 @@ void main() {
     expect(await raw('notes.__version'), 2);
 
     disk = await build(encodeAbove: 0);
-    final again = _Notes(storage: disk);
+    final counting = _CountingStorage(disk);
+    final again = _Notes(storage: counting);
     addTearDown(again.dispose);
 
     expect(again.lines, ['a', 'b']);
+    // The decoded state compares equal to what was hydrated, so setting it
+    // again writes nothing.
     again.lines = ['a', 'b'];
     await settle();
+    expect(counting.writes, 0);
+    again.lines = ['a', 'b', 'c'];
+    await settle();
+    expect(counting.writes, 1);
     await disk.close();
   });
 
