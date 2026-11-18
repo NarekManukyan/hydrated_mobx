@@ -115,8 +115,8 @@ class _LargeStatePageState extends State<LargeStatePage> {
           'Hive keeps every value of an open box decoded in memory. The '
           '"$kLargeNotesBox" box is built with encoding: gzipJson, so each '
           'note above 16 KB is kept as gzipped bytes and decoded only when a '
-          'store hydrates. The "$kLargeNotesDirectory" FileStorage keeps one file '
-          'per note and holds nothing in memory until a note is read. '
+          'store hydrates. The "$kLargeNotesDirectory" FileStorage keeps one '
+          'file per note and holds nothing in memory until a note is read. '
           'transferTokens moves notes from the box to the files.',
       children: [
         Section(
