@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
+import 'package:hydrated_mobx/file_storage.dart';
 import 'package:hydrated_mobx/hydrated_mobx.dart';
 
 import 'counting_storage.dart';
@@ -10,6 +11,11 @@ const kSessionBox = 'session';
 const kAccountBox = 'account';
 const kRecentBox = 'recent';
 const kVaultBox = 'vault';
+const kLargeNotesBox = 'large_notes';
+
+/// The directory, under the storage directory, of the one-file-per-key
+/// storage.
+const kLargeNotesDirectory = 'large_notes';
 
 /// The recent-items box keeps at most this many `recent_` entries.
 const kRecentMaxEntries = 5;
@@ -26,6 +32,8 @@ class AppStorages {
     required this.account,
     required this.recent,
     required this.vault,
+    required this.largeNotesBox,
+    required this.largeNotesFiles,
     this.directory,
   });
 
@@ -37,6 +45,8 @@ class AppStorages {
         account: InMemoryStorage(),
         recent: InMemoryStorage(),
         vault: InMemoryStorage(),
+        largeNotesBox: InMemoryStorage(),
+        largeNotesFiles: InMemoryStorage(),
       );
 
   /// The directory the Hive boxes live in; null in memory.
@@ -57,10 +67,24 @@ class AppStorages {
   /// AES-256 encrypted.
   final Storage vault;
 
+  /// The large notes kept in a box, gzipped rather than decoded.
+  final Storage largeNotesBox;
+
+  /// The large notes kept one file per key, nothing in memory until read.
+  final Storage largeNotesFiles;
+
   static Future<AppStorages> build(String directory) async {
     final dir = HydratedStorageDirectory(directory);
     // Each box has its own build lock, so they open side by side.
-    final (main, session, account, recent, vault) = await (
+    final (
+      main,
+      session,
+      account,
+      recent,
+      vault,
+      largeNotesBox,
+      largeNotesFiles,
+    ) = await (
       HydratedStorage.build(storageDirectory: dir),
       HydratedStorage.build(storageDirectory: dir, boxName: kSessionBox),
       HydratedStorage.build(storageDirectory: dir, boxName: kAccountBox),
@@ -72,6 +96,16 @@ class AppStorages {
           sha256.convert(utf8.encode(_kVaultPassword)).bytes,
         ),
       ),
+      HydratedStorage.build(
+        storageDirectory: dir,
+        boxName: kLargeNotesBox,
+        encoding: HydratedEncoding.gzipJson,
+      ),
+      FileStorage.build(
+        storageDirectory: HydratedStorageDirectory(
+          '$directory/$kLargeNotesDirectory',
+        ),
+      ),
     ).wait;
     return AppStorages._(
       directory: directory,
@@ -80,6 +114,8 @@ class AppStorages {
       account: account,
       recent: recent,
       vault: vault,
+      largeNotesBox: largeNotesBox,
+      largeNotesFiles: largeNotesFiles,
     );
   }
 
@@ -132,13 +168,19 @@ class AppStorages {
   );
 
   /// Every storage by display name, for the inspector. Getters, since the
-  /// recent box is replaced when it is rebuilt.
-  Map<String, Storage Function()> get all => {
-    'main (hydrated_box)': () => main,
-    kSessionBox: () => session,
-    kAccountBox: () => account,
-    kRecentBox: () => recent,
-    kVaultBox: () => vault,
+  /// recent box is replaced when it is rebuilt. A storage of large values
+  /// is listed by key only, without reading them.
+  Map<String, ({Storage Function() storage, bool large})> get all => {
+    'main (hydrated_box)': (storage: () => main, large: false),
+    kSessionBox: (storage: () => session, large: false),
+    kAccountBox: (storage: () => account, large: false),
+    kRecentBox: (storage: () => recent, large: false),
+    kVaultBox: (storage: () => vault, large: false),
+    kLargeNotesBox: (storage: () => largeNotesBox, large: true),
+    '$kLargeNotesDirectory (files)': (
+      storage: () => largeNotesFiles,
+      large: true,
+    ),
   };
 }
 

@@ -5,7 +5,7 @@ import 'package:hydrated_mobx/hydrated_mobx.dart';
 import '../app/app_storages.dart';
 import '../stores/session_stores.dart';
 import '../widgets/demo_page.dart';
-import '../widgets/live_box_keys.dart';
+import '../widgets/live_storage_keys.dart';
 
 const _kItems = ['Coffee', 'Bread', 'Milk', 'Apples', 'Cheese', 'Tea'];
 
@@ -136,11 +136,11 @@ class _NamespacesPageState extends State<NamespacesPage> {
           ],
         ),
         const SizedBox(height: 16),
-        LiveBoxKeys(
+        LiveStorageKeys(
           title: '"$kSessionBox" box',
           storage: () => appStorages.session,
         ),
-        LiveBoxKeys(
+        LiveStorageKeys(
           title: '"$kAccountBox" box',
           storage: () => appStorages.account,
         ),

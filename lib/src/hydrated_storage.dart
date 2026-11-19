@@ -9,8 +9,12 @@ import 'package:hive_ce/hive.dart';
 // single major (`hive_ce: ^2`) to bound exposure to internal changes.
 // ignore: implementation_imports
 import 'package:hive_ce/src/hive_impl.dart';
+import 'package:hydrated_mobx/src/eviction.dart';
+import 'package:hydrated_mobx/src/gzip/gzip.dart';
 import 'package:hydrated_mobx/src/hydrated_cipher.dart';
+import 'package:hydrated_mobx/src/hydrated_encoding.dart';
 import 'package:hydrated_mobx/src/hydrated_mobx.dart';
+import 'package:hydrated_mobx/src/pending_changes.dart';
 import 'package:meta/meta.dart';
 import 'package:synchronized/synchronized.dart';
 
@@ -18,6 +22,12 @@ import 'package:synchronized/synchronized.dart';
 ///
 /// Implementations must call [HydratedMobX.suspendAll] with themselves from
 /// [clear] before wiping, so no live store writes its state back afterwards.
+///
+/// A storage whose [write], [deleteAll] or [clear] can wait behind other
+/// work (a lock, a queue) must have [read] and [keys] reflect each from the
+/// moment it is called, not when it runs: a store built in between would
+/// otherwise hydrate state that is then replaced or deleted under it, and
+/// its next change would overwrite the newer state.
 abstract class Storage {
   /// Returns the value for [key], or `null` when there is none.
   dynamic read(String key);
@@ -28,7 +38,10 @@ abstract class Storage {
   /// Deletes the value for [key].
   Future<void> delete(String key);
 
-  /// Deletes the values for every key in [keys] in one operation.
+  /// Deletes the values for every key in [keys]: in one operation where the
+  /// storage can do that (as `HydratedStorage` does), otherwise one key at a
+  /// time with every state key before its version key, so an interruption
+  /// never leaves state without its version.
   Future<void> deleteAll(Iterable<String> keys);
 
   /// Every key currently stored, including the `.__version` keys
@@ -54,14 +67,29 @@ abstract class UseTrackingStorage implements Storage {
   void markUsed(String key);
 }
 
+/// A [UseTrackingStorage] whose use times can be read and set, so
+/// [HydratedMobX.moveTokens] and [HydratedMobX.transferTokens] keep a key's
+/// use time when they move its state.
+abstract class UseTimeStorage implements UseTrackingStorage {
+  /// When [key] was last used, or `null` when no use time is known.
+  DateTime? usedAt(String key);
+
+  /// Records that [key] was last used at [time]. Does nothing when [key] is
+  /// not stored or the storage does not record use times.
+  Future<void> setUsedAt(String key, DateTime time);
+}
+
 /// {@template forwarding_storage}
 /// A [Storage] that forwards every call to [inner]; extend it to wrap a
-/// storage (to count, log or delay writes) and override what you need.
+/// storage (to count or log writes, say) and override what you need. A
+/// wrapper that holds a [write], [deleteAll] or [clear] back before passing
+/// it on must also have [read] and [keys] show it from the moment it is
+/// called, as the [Storage] contract requires.
 ///
 /// Stores bind to the wrapper, not to [inner], so [clear] suspends the
 /// wrapper's stores before clearing [inner].
 /// {@endtemplate}
-class ForwardingStorage implements UseTrackingStorage {
+class ForwardingStorage implements UseTimeStorage {
   /// {@macro forwarding_storage}
   ForwardingStorage(this.inner);
 
@@ -87,6 +115,18 @@ class ForwardingStorage implements UseTrackingStorage {
   void markUsed(String key) {
     final target = inner;
     if (target is UseTrackingStorage) target.markUsed(key);
+  }
+
+  @override
+  DateTime? usedAt(String key) {
+    final target = inner;
+    return target is UseTimeStorage ? target.usedAt(key) : null;
+  }
+
+  @override
+  Future<void> setUsedAt(String key, DateTime time) async {
+    final target = inner;
+    if (target is UseTimeStorage) await target.setUsedAt(key, time);
   }
 
   @override
@@ -149,7 +189,7 @@ class HydratedStorageDirectory {
 /// stores that belong there via `HydratedMobX(storage: ...)`; clearing one
 /// namespace then never touches the other.
 /// {@endtemplate}
-class HydratedStorage implements UseTrackingStorage {
+class HydratedStorage implements UseTimeStorage {
   /// Wraps an already-open [box] without eviction metadata.
   @visibleForTesting
   HydratedStorage(Box<dynamic> box) : this._(box, null, clock: DateTime.now);
@@ -159,8 +199,10 @@ class HydratedStorage implements UseTrackingStorage {
     this._meta, {
     required DateTime Function() clock,
     Duration useResolution = defaultUseResolution,
+    HydratedValueCodec codec = const HydratedValueCodec(HydratedEncoding.tree),
   })  : _clock = clock,
-        _useResolution = useResolution;
+        _useResolution = useResolution,
+        _codec = codec;
 
   /// The box name used when none is given to [build].
   static const defaultBoxName = 'hydrated_box';
@@ -170,6 +212,9 @@ class HydratedStorage implements UseTrackingStorage {
 
   /// How often a key's use time is rewritten at most, by default.
   static const defaultUseResolution = Duration(minutes: 1);
+
+  /// The `encodeAbove` used when none is given to [build].
+  static const defaultEncodeAbove = 16 * 1024;
 
   /// Returns an instance of [HydratedStorage].
   ///
@@ -197,6 +242,20 @@ class HydratedStorage implements UseTrackingStorage {
   ///   setting the same across launches: keys written while it was off look
   ///   as old as their last recorded use. A use time can lag the real use by
   ///   up to [useResolution], so keep it well below [maxAge].
+  /// - [initialUseTime] gives keys that have no use time yet (state written
+  ///   before tracking was turned on) one from their stored value, e.g. a
+  ///   last-opened or created-at field, so the first eviction ranks them by
+  ///   it. Keys it returns `null` for, or throws for, count as used at
+  ///   build, and a time after now counts as now.
+  /// - [encoding] keeps state of more than [encodeAbove] bytes of JSON as
+  ///   bytes rather than as maps and lists, which Hive would hold decoded in
+  ///   memory for as long as the box is open. Each read then decodes it.
+  ///   When either setting changes, the first build after it converts the
+  ///   values already in the box to it, back to [HydratedEncoding.tree]
+  ///   included; later builds skip that. Any value reads back whatever the
+  ///   setting. A box with encoded values must not be opened by
+  ///   hydrated_mobx before 3.0: it would fail to hydrate them, and
+  ///   overwrite them.
   /// - [compactionStrategy] overrides when Hive rewrites the box file.
   static Future<HydratedStorage> build({
     required HydratedStorageDirectory storageDirectory,
@@ -207,12 +266,23 @@ class HydratedStorage implements UseTrackingStorage {
     bool Function(String key)? evictable,
     bool trackUse = false,
     Duration useResolution = defaultUseResolution,
+    DateTime? Function(String key, dynamic value)? initialUseTime,
+    HydratedEncoding encoding = HydratedEncoding.tree,
+    int encodeAbove = defaultEncodeAbove,
     HydratedCompactionStrategy? compactionStrategy,
     @visibleForTesting DateTime Function() clock = DateTime.now,
   }) {
-    if (maxAge != null && maxAge.isNegative) {
-      throw ArgumentError.value(maxAge, 'maxAge', 'must not be negative');
+    if (encoding == HydratedEncoding.gzipJson && !gzipSupported) {
+      throw UnsupportedError('gzipJson is not available on this platform');
     }
+    if (encodeAbove < 0) {
+      throw ArgumentError.value(encodeAbove, 'encodeAbove', 'must be >= 0');
+    }
+    checkEvictArguments(
+      olderThan: maxAge,
+      maxEntries: maxEntries,
+      olderThanName: 'maxAge',
+    );
     if (boxName.endsWith(_metaBoxSuffix)) {
       throw ArgumentError.value(
         boxName,
@@ -247,9 +317,12 @@ class HydratedStorage implements UseTrackingStorage {
         tracks ? boxes.last : null,
         clock: clock,
         useResolution: useResolution,
+        codec: HydratedValueCodec(encoding, encodeAbove: encodeAbove),
       );
       try {
-        await storage._stampUntracked();
+        // Stamping first reads values before they are encoded.
+        await storage._stampUntracked(initialUseTime);
+        await storage._encodeStored();
         if (maxAge != null || maxEntries != null) {
           await storage.evict(
             olderThan: maxAge,
@@ -280,8 +353,13 @@ class HydratedStorage implements UseTrackingStorage {
 
   final DateTime Function() _clock;
   final Duration _useResolution;
+  final HydratedValueCodec _codec;
 
   final _lock = Lock();
+
+  /// The writes, deletes and clears queued behind [_lock], which [read] and
+  /// [keys] show from the moment each is called.
+  final _pending = PendingChanges();
 
   void _checkOpen(String operation) {
     if (!_box.isOpen) throw StorageClosedException(operation);
@@ -304,22 +382,35 @@ class HydratedStorage implements UseTrackingStorage {
   @override
   dynamic read(String key) {
     _checkOpen('read');
-    return _box.get(key);
+    return _pending.read(
+      key,
+      decode: _codec.decode,
+      fromStorage: () => _codec.decode(_box.get(key)),
+    );
   }
 
   @override
   Iterable<String> get keys {
     _checkOpen('list keys');
-    return _box.keys.whereType<String>();
+    return _pending.keys(
+      _box.keys.whereType<String>(),
+      holds: _box.containsKey,
+    );
   }
 
   @override
-  Future<void> write(String key, dynamic value) {
-    return _locked(
-      'write',
-      () => Future.wait([_box.put(key, value), _stamp(key)]),
-    );
-  }
+  Future<void> write(String key, dynamic value) => Future.sync(() {
+        _checkOpen('write');
+        final stored = _codec.encode(value);
+        return _pending.write(
+          key,
+          stored,
+          () => _locked(
+            'write',
+            () => Future.wait([_box.put(key, stored), _stamp(key)]),
+          ),
+        );
+      });
 
   @override
   Future<void> delete(String key) => deleteAll([key]);
@@ -329,12 +420,15 @@ class HydratedStorage implements UseTrackingStorage {
     _checkOpen('delete');
     final list = keys.toList();
     if (list.isEmpty) return Future.value();
-    return _locked(
-      'delete',
-      () => Future.wait([
-        _box.deleteAll(list),
-        if (_meta case final meta?) meta.deleteAll(list),
-      ]),
+    return _pending.delete(
+      list,
+      () => _locked(
+        'delete',
+        () => Future.wait([
+          _box.deleteAll(list),
+          if (_meta case final meta?) meta.deleteAll(list),
+        ]),
+      ),
     );
   }
 
@@ -344,12 +438,19 @@ class HydratedStorage implements UseTrackingStorage {
     // Suspend this storage's live stores now, not when the lock frees up: a
     // write they queued meanwhile would land after the wipe.
     HydratedMobX.suspendAll(storage: this);
-    return _locked('clear', () async {
-      await Future.wait([
-        _box.clear(),
-        if (_meta case final meta?) meta.clear(),
-      ]);
-    });
+    return _pending.clear(
+      () => _locked('clear', () async {
+        await Future.wait([
+          _box.clear(),
+          if (_meta case final meta?) meta.clear(),
+        ]);
+        // The record went with the rest; values written from now on are kept
+        // in this setting, which a later build must know to convert from.
+        if (_codec.encoding != HydratedEncoding.tree) {
+          await _box.put(_encodingKey, _setting);
+        }
+      }),
+    );
   }
 
   @override
@@ -361,63 +462,54 @@ class HydratedStorage implements UseTrackingStorage {
     );
   }
 
-  /// Deletes stale state, together with its `.__version` key.
+  /// Deletes stale state, together with its `.__version` key, and returns
+  /// a new set of the state keys it deleted, so state kept beside them under
+  /// other keys can go too.
   ///
   /// - [olderThan] drops every key not hydrated or written for that long.
   /// - [maxEntries] then keeps only that many keys, the most recently used.
   /// - [where] limits both to the keys it accepts; other keys are never
   ///   evicted and do not count towards [maxEntries].
+  /// - [keepLive] spares, like [where], the keys of stores that are alive
+  ///   (see [HydratedMobX.liveTokens]), e.g. the one on screen.
   ///
   /// A key's use time has the resolution given to [build]. Keys written before
-  /// eviction metadata existed count as used when the storage was built.
+  /// eviction metadata existed count as used when the storage was built,
+  /// unless `initialUseTime` gave them a time.
   ///
   /// Live stores of evicted keys stop persisting, as with
-  /// [HydratedMobX.clearAll]. Does nothing unless the storage was built to
-  /// track use (`trackUse`, `maxAge` or `maxEntries`).
-  Future<void> evict({
+  /// [HydratedMobX.clearAll]. Does nothing, and returns no keys, unless the
+  /// storage was built to track use (`trackUse`, `maxAge` or `maxEntries`).
+  Future<Set<String>> evict({
     Duration? olderThan,
     int? maxEntries,
     bool Function(String key)? where,
+    bool keepLive = false,
   }) async {
-    if (maxEntries != null && maxEntries < 0) {
-      throw ArgumentError.value(maxEntries, 'maxEntries', 'must be >= 0');
-    }
-    if (olderThan != null && olderThan.isNegative) {
-      throw ArgumentError.value(olderThan, 'olderThan', 'must not be negative');
-    }
+    checkEvictArguments(olderThan: olderThan, maxEntries: maxEntries);
     final meta = _meta;
     if (meta == null) {
       _checkOpen('evict');
-      return;
+      return <String>{};
     }
     // Let use times already queued by [markUsed] land first, or a key used
     // just now could be judged by its previous use time.
     await _locked('evict', () async {});
     final now = _clock().millisecondsSinceEpoch;
-    final candidates = [
-      for (final key in keys)
-        if (!HydratedMobX.isVersionKey(key) && (where?.call(key) ?? true))
-          (key: key, usedAt: _usedAt(meta, key) ?? now),
-    ];
-    final doomed = <String>{};
-    if (olderThan != null) {
-      final cutoff = now - olderThan.inMilliseconds;
-      doomed.addAll([
-        for (final c in candidates)
-          if (c.usedAt < cutoff) c.key,
-      ]);
-    }
-    if (maxEntries != null) {
-      final kept = [
-        for (final c in candidates)
-          if (!doomed.contains(c.key)) c,
-      ]..sort((a, b) => b.usedAt.compareTo(a.usedAt));
-      doomed.addAll(kept.skip(maxEntries).map((c) => c.key));
-    }
-    if (doomed.isEmpty) return;
+    final doomed = evictionsAmong(
+      evictionCandidates(keys, where),
+      usedAt: (key) => _usedAt(meta, key) ?? now,
+      now: now,
+      olderThan: olderThan,
+      maxEntries: maxEntries,
+      live: keepLive ? () => HydratedMobX.liveTokens(storage: this) : null,
+      gone: _pending.hides,
+    );
+    if (doomed.isEmpty) return doomed;
     // The shared path: suspends live stores of doomed keys and deletes their
     // version keys too.
     await HydratedMobX.clearAll(storage: this, where: doomed.contains);
+    return doomed;
   }
 
   static int? _usedAt(Box<dynamic> meta, String key) {
@@ -425,27 +517,87 @@ class HydratedStorage implements UseTrackingStorage {
     return value is int ? value : null;
   }
 
+  /// Key of the record of the setting the box's values were last converted
+  /// to. An int, so [keys], which lists strings only, never shows it.
+  static const _encodingKey = 0x484d4531; // 'HME1'
+
+  /// Converts the values in the box to [_codec]'s setting, when it is not
+  /// the one they were last converted to, so the memory they take changes
+  /// now rather than at their next write.
+  Future<void> _encodeStored() async {
+    final last = _box.get(_encodingKey);
+    if (last == _setting) return;
+    // A box never converted holds no encoded values to turn back.
+    if (last == null && _codec.encoding == HydratedEncoding.tree) return;
+    final converted = <Object, Object?>{};
+    for (final key in keys) {
+      final stored = _box.get(key);
+      final Object? next;
+      try {
+        next = _codec.reencode(stored);
+      } on FormatException {
+        // Left as it is: its store's hydration reports it, as for any value
+        // that does not read, rather than the whole box failing to open.
+        continue;
+      }
+      if (!identical(next, stored)) converted[key] = next;
+    }
+    converted[_encodingKey] = _setting;
+    await _box.putAll(converted);
+  }
+
+  /// [_codec]'s setting, as recorded under [_encodingKey].
+  String get _setting => _codec.encoding == HydratedEncoding.tree
+      ? HydratedEncoding.tree.name
+      : '${_codec.encoding.name}:${_codec.encodeAbove}';
+
+  /// [key]'s value for `initialUseTime`, or `null` when it does not read.
+  Object? _readForStamp(String key) {
+    try {
+      return read(key);
+    } on FormatException {
+      return null;
+    }
+  }
+
   /// Gives every key without a use time one, so state written before
-  /// eviction metadata existed is aged from now rather than evicted at once.
-  Future<void> _stampUntracked() async {
+  /// eviction metadata existed is aged from [initialUseTime], or from now,
+  /// rather than evicted at once.
+  Future<void> _stampUntracked(
+    DateTime? Function(String key, dynamic value)? initialUseTime,
+  ) async {
     final meta = _meta;
     if (meta == null) return;
     final now = _clock().millisecondsSinceEpoch;
+    int stampOf(DateTime? time) =>
+        time == null ? now : useTimeAt(time.millisecondsSinceEpoch, now);
+    DateTime? timeOf(String key) {
+      if (initialUseTime == null) return null;
+      try {
+        return initialUseTime(key, _readForStamp(key));
+      } on Object {
+        // A callback that fails for one value would otherwise fail every
+        // build, as the key stays untracked until it gets a time.
+        return null;
+      }
+    }
+
     final untracked = {
       for (final key in keys)
-        if (!HydratedMobX.isVersionKey(key) && !meta.containsKey(key)) key: now,
+        if (!HydratedMobX.isVersionKey(key) && !meta.containsKey(key))
+          key: stampOf(timeOf(key)),
     };
     if (untracked.isNotEmpty) await meta.putAll(untracked);
   }
 
   /// Whether [key]'s use time is due to be rewritten: it is a state key and
   /// was not recorded within the use resolution.
-  bool _dueStamp(Box<dynamic> meta, String key) {
-    if (HydratedMobX.isVersionKey(key)) return false;
-    final last = _usedAt(meta, key);
-    return last == null ||
-        _clock().millisecondsSinceEpoch - last >= _useResolution.inMilliseconds;
-  }
+  bool _dueStamp(Box<dynamic> meta, String key) => isUseDue(
+        key,
+        last: _usedAt(meta, key),
+        now: _clock().millisecondsSinceEpoch,
+        resolution: _useResolution,
+      );
 
   /// Records [key]'s use time when [_dueStamp]. Caller holds [_lock].
   Future<void> _stamp(String key) async {
@@ -453,6 +605,32 @@ class HydratedStorage implements UseTrackingStorage {
     if (meta == null || !meta.isOpen || !_dueStamp(meta, key)) return;
     await meta.put(key, _clock().millisecondsSinceEpoch);
   }
+
+  /// When [key] was last used, as recorded at most every `useResolution`;
+  /// `null` when this storage does not track use or [key] has no use time.
+  @override
+  DateTime? usedAt(String key) {
+    _checkOpen('read use times');
+    final meta = _meta;
+    if (meta == null || _pending.hides(key)) return null;
+    final used = _usedAt(meta, key);
+    return used == null ? null : DateTime.fromMillisecondsSinceEpoch(used);
+  }
+
+  /// Records [time], or now if it is later, as [key]'s use time, when this
+  /// storage tracks use and holds [key].
+  @override
+  Future<void> setUsedAt(String key, DateTime time) =>
+      _locked('set use times', () async {
+        final meta = _meta;
+        if (meta == null ||
+            HydratedMobX.isVersionKey(key) ||
+            !_box.containsKey(key)) {
+          return;
+        }
+        final now = _clock().millisecondsSinceEpoch;
+        await meta.put(key, useTimeAt(time.millisecondsSinceEpoch, now));
+      });
 
   @override
   void markUsed(String key) {

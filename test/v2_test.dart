@@ -599,6 +599,7 @@ void main() {
       Duration? maxAge,
       int? maxEntries,
       bool Function(String key)? evictable,
+      DateTime? Function(String key, dynamic value)? initialUseTime,
     }) =>
         HydratedStorage.build(
           storageDirectory: HydratedStorageDirectory(dir.path),
@@ -607,6 +608,7 @@ void main() {
           maxAge: maxAge,
           maxEntries: maxEntries,
           evictable: evictable,
+          initialUseTime: initialUseTime,
           clock: () => now,
         );
 
@@ -622,6 +624,168 @@ void main() {
       expect(account.read('k'), 2);
       await session.close();
       await account.close();
+    });
+
+    test('reads and keys show a write queued behind the lock', () async {
+      final disk = await build();
+      await disk.write('a', 1);
+      // Holds the lock, so the writes after it queue.
+      final busy = disk.write('busy', 1);
+      final queued = [disk.write('a', 2), disk.write('b', 1)];
+
+      expect(disk.read('a'), 2);
+      expect(disk.read('b'), 1);
+      expect(disk.keys.toSet(), {'a', 'b', 'busy'});
+      queued.add(disk.deleteAll(['b']));
+      expect(disk.read('b'), isNull);
+
+      await Future.wait([busy, ...queued]);
+      expect(disk.keys.toSet(), {'a', 'busy'});
+      expect(disk.read('a'), 2);
+      await disk.close();
+    });
+
+    test(
+        'a store rebuilt before its migration is stamped is not migrated '
+        'again', () async {
+      final disk = await build();
+      await disk.write('migrating', {'old': 3}); // Version 1 data.
+      // Writes the migrated state, then stamps version 2 once it lands.
+      final first = _Migrating(storage: disk);
+      expect(first.count, 3);
+      first.dispose();
+
+      final second = _Migrating(storage: disk);
+      addTearDown(second.dispose);
+      expect(second.count, 3);
+      await first.flush();
+      await second.flush();
+      expect(disk.read('migrating'), {'count': 3});
+      expect(disk.read(HydratedMobX.versionKeyOf('migrating')), 2);
+      await disk.close();
+    });
+
+    test('a store built while a delete waits does not hydrate its value',
+        () async {
+      final disk = await build();
+      await disk.write('counter', {'count': 5});
+      await disk.write('other', 1);
+      // Holds the lock, so the delete that evict and clearAll queue waits.
+      final busy = disk.write('busy', 1);
+      final deleting =
+          HydratedMobX.clearAll(storage: disk, where: (t) => t == 'counter');
+
+      final store = _Counter(storage: disk);
+      expect(store.count, 0);
+      // The store's first write is queued after the delete, so it is what
+      // the key reads as now.
+      expect(disk.read('counter'), {'count': 0});
+      expect(disk.read('other'), 1);
+
+      await busy;
+      await deleting;
+      // The store's own state, not a hole where it was deleted.
+      await store.flush();
+      expect(disk.read('counter'), {'count': 0});
+      store.dispose();
+      await disk.close();
+    });
+
+    test('a key cleared or deleted while queued reads as gone', () async {
+      final disk = await build();
+      await disk.write('a', 1);
+      await disk.write('b', 2);
+
+      final deleting = disk.deleteAll(['a']);
+      expect(disk.read('a'), isNull);
+      expect(disk.keys, ['b']);
+      final clearing = disk.clear();
+      expect(disk.read('b'), isNull);
+      final writing = disk.write('c', 3);
+      await Future.wait([deleting, clearing, writing]);
+
+      expect(disk.keys, ['c']);
+      expect(disk.read('c'), 3);
+      await disk.close();
+    });
+
+    test('a key a queued delete hides has no use time', () async {
+      final disk = await build();
+      await disk.write('a', 1);
+      expect(disk.usedAt('a'), isNotNull);
+      // Holds the lock, so the delete waits.
+      final busy = disk.write('busy', 1);
+      final deleting = disk.deleteAll(['a']);
+
+      expect(disk.usedAt('a'), isNull);
+      await Future.wait([busy, deleting]);
+      await disk.close();
+    });
+
+    test('a key written just before a clear stays hidden until it is wiped',
+        () async {
+      final disk = await build();
+      // Queued before the clear, so it lands first and the clear wipes it.
+      final writing = disk.write('new', 1);
+      final clearing = disk.clear();
+      final seen = <Object?>[];
+      final done = writing.then((_) {
+        seen
+          ..add(disk.read('new'))
+          ..add(disk.keys.toList());
+      });
+
+      await Future.wait([done, clearing]);
+      expect(seen, [isNull, isEmpty]);
+      expect(disk.keys, isEmpty);
+      await disk.close();
+    });
+
+    test('evict leaves out keys a queued delete hides', () async {
+      final disk = await build();
+      for (final key in ['a', 'b', 'c']) {
+        await disk.write(key, 1);
+        now = now.add(const Duration(minutes: 5));
+      }
+      // Holds the lock, so evict and the delete behind it both wait.
+      final busy = disk.write('busy', 1);
+      final evicting = disk.evict(
+        maxEntries: 2,
+        where: (key) => key != 'busy',
+      );
+      final deleting = disk.delete('c');
+
+      await Future.wait([busy, deleting]);
+      expect(await evicting, isEmpty);
+      expect(disk.keys.toSet(), {'a', 'b', 'busy'});
+      await disk.close();
+    });
+
+    test('evict leaves out a key whose delete is queued while it ranks',
+        () async {
+      final disk = await build();
+      for (final key in ['a', 'b', 'c']) {
+        await disk.write(key, 1);
+        now = now.add(const Duration(minutes: 5));
+      }
+      Future<void>? deleting;
+      final evicting = disk.evict(
+        maxEntries: 2,
+        where: (key) {
+          if (key == 'a') deleting = disk.delete('c');
+          return key != 'busy';
+        },
+      );
+      // Queued behind evict's own wait for the lock, so it holds the lock
+      // while evict ranks, and the delete from where waits behind it.
+      final busy = disk.write('busy', 1);
+      await busy;
+      final evicted = await evicting;
+      await deleting;
+
+      expect(evicted, isEmpty);
+      expect(disk.keys.toSet(), {'a', 'b', 'busy'});
+      await disk.close();
     });
 
     test('keys and deleteAll', () async {
@@ -717,6 +881,193 @@ void main() {
       await settle();
 
       expect(disk.keys, isEmpty);
+      await disk.close();
+    });
+
+    test('evict() returns the state keys it deleted', () async {
+      final disk = await build();
+      await disk.write('a', 1);
+      await disk.write('a.__version', 2);
+      now = now.add(const Duration(minutes: 5));
+      await disk.write('b', 1);
+      now = now.add(const Duration(minutes: 5));
+      await disk.write('c', 1);
+
+      final evicted = await disk.evict(maxEntries: 1);
+
+      expect(evicted, {'a', 'b'});
+      expect(disk.keys, ['c']);
+      final none = await disk.evict(maxEntries: 1);
+      expect(none, isEmpty);
+      // Either way the caller owns a set it may change.
+      none.add('x');
+      evicted.add('x');
+      await disk.close();
+    });
+
+    test('evict() returns no keys when the storage does not track use',
+        () async {
+      final disk = await build(trackUse: false);
+      await disk.write('a', 1);
+
+      final none = await disk.evict(maxEntries: 0);
+      expect(none, isEmpty);
+      none.add('x');
+      expect(disk.keys, ['a']);
+      await disk.close();
+    });
+
+    test('keepLive spares live stores, which do not count towards the cap',
+        () async {
+      final disk = await build();
+      final open = _Counter(storage: disk, storeId: 'open')..increment();
+      addTearDown(open.dispose);
+      await settle();
+      now = now.add(const Duration(minutes: 5));
+      await disk.write('counterold', {'count': 1});
+      now = now.add(const Duration(minutes: 5));
+      await disk.write('counternew', {'count': 1});
+
+      final evicted = await disk.evict(maxEntries: 1, keepLive: true);
+
+      expect(evicted, {'counterold'});
+      expect(disk.keys.toSet(), {'counteropen', 'counternew'});
+      open.increment();
+      await settle();
+      expect(disk.read('counteropen'), {'count': 2});
+      await disk.close();
+    });
+
+    test('keepLive spares a store that where itself created', () async {
+      final disk = await build();
+      await disk.write('counterpeek', {'count': 1});
+      _Counter? peeked;
+
+      final evicted = await disk.evict(
+        maxEntries: 0,
+        keepLive: true,
+        where: (key) {
+          peeked ??= _Counter(storage: disk, storeId: 'peek');
+          return true;
+        },
+      );
+      addTearDown(peeked!.dispose);
+
+      expect(evicted, isEmpty);
+      expect(disk.read('counterpeek'), {'count': 1});
+      await disk.close();
+    });
+
+    test('liveTokens lists the stores bound to a storage until disposed',
+        () async {
+      final disk = await build();
+      final other = InMemoryStorage();
+      final a = _Counter(storage: disk, storeId: 'a');
+      final b = _Counter(storage: ForwardingStorage(disk), storeId: 'b');
+      final c = _Counter(storage: other, storeId: 'c');
+      addTearDown(b.dispose);
+      addTearDown(c.dispose);
+
+      expect(HydratedMobX.liveTokens(storage: disk), {'countera', 'counterb'});
+      a.dispose();
+      expect(HydratedMobX.liveTokens(storage: disk), {'counterb'});
+      expect(HydratedMobX.liveTokens(storage: other), {'counterc'});
+      await disk.close();
+    });
+
+    test('initialUseTime ranks keys written before use times were kept',
+        () async {
+      final hive = Hive..init(dir.path);
+      final legacy = await hive.openBox<dynamic>('ranked');
+      for (final (key, day) in [('a', 3), ('b', 1), ('c', 2), ('d', 0)]) {
+        await legacy.put(
+          key,
+          {'openedAt': DateTime(2025, 1, day + 1).toIso8601String()},
+        );
+      }
+      await legacy.put('e', 'no date');
+      await legacy.close();
+
+      final disk = await build(
+        boxName: 'ranked',
+        maxEntries: 3,
+        initialUseTime: (key, value) =>
+            value is Map ? DateTime.parse(value['openedAt'] as String) : null,
+      );
+
+      // e has no time, so it counts as used at build: the newest of all.
+      expect(disk.keys.toSet(), {'a', 'c', 'e'});
+      await disk.close();
+    });
+
+    test('usedAt and setUsedAt, and moveTokens keeps use times', () async {
+      final disk = await build();
+      await disk.write('old_1', {'count': 1});
+      expect(disk.usedAt('old_1'), now);
+      await disk.setUsedAt('old_1', DateTime(2025));
+      await disk.setUsedAt('absent', DateTime(2025));
+      expect(disk.usedAt('old_1'), DateTime(2025));
+      expect(disk.usedAt('absent'), isNull);
+
+      now = now.add(const Duration(days: 1));
+      await HydratedMobX.moveTokens(
+        (token, _) => token.replaceFirst('old_', 'new_'),
+        storage: disk,
+      );
+      expect(disk.usedAt('new_1'), DateTime(2025));
+
+      await disk.setUsedAt('new_1', DateTime(2030));
+      expect(disk.usedAt('new_1'), now);
+      await disk.close();
+
+      final untracked = await build(trackUse: false);
+      await untracked.write('k', 1);
+      await untracked.setUsedAt('k', DateTime(2025));
+      expect(untracked.usedAt('k'), isNull);
+      await untracked.close();
+    });
+
+    test('build rejects a bad maxEntries before opening the box', () async {
+      expect(() => build(maxEntries: -1), throwsArgumentError);
+      expect(dir.listSync(), isEmpty);
+    });
+
+    test('an initialUseTime that throws counts as used at build', () async {
+      final hive = Hive..init(dir.path);
+      final legacy = await hive.openBox<dynamic>('throwing');
+      await legacy.put('dated', {'openedAt': '2025-01-01'});
+      await legacy.put('undated', {'title': 'x'});
+      await legacy.close();
+
+      final disk = await build(
+        boxName: 'throwing',
+        maxEntries: 1,
+        // Throws on a map without the field.
+        initialUseTime: (key, value) =>
+            DateTime.parse((value as Map)['openedAt'] as String),
+      );
+
+      expect(disk.keys, ['undated']);
+      expect(disk.usedAt('undated'), now);
+      await disk.close();
+    });
+
+    test('an initialUseTime in the future counts as now', () async {
+      final hive = Hive..init(dir.path);
+      final legacy = await hive.openBox<dynamic>('future');
+      await legacy.put('k', 1);
+      await legacy.close();
+
+      var disk = await build(
+        boxName: 'future',
+        initialUseTime: (_, __) => DateTime(2030),
+      );
+      now = now.add(const Duration(minutes: 5));
+      await disk.write('newer', 1);
+      await disk.close();
+
+      disk = await build(boxName: 'future', maxEntries: 1);
+      expect(disk.keys, ['newer']);
       await disk.close();
     });
 
@@ -991,7 +1342,7 @@ class _ThrowingMigrateObserver extends HydratedObserver {
 
 /// Version 2 store renaming `old` to `count`.
 class _Migrating extends HydratedMobX with Store {
-  _Migrating({super.onStorageError});
+  _Migrating({super.onStorageError, super.storage});
 
   final Observable<int> _count = Observable(0);
 
