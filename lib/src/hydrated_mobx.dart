@@ -189,19 +189,27 @@ abstract class HydratedMobX with Store {
   /// finishes. A version key left at the new token without its state is
   /// replaced.
   ///
+  /// A key that fails, in [to] (by throwing or by returning a version key)
+  /// or in its move, stays where it is, and the others still move. Each
+  /// failure goes to [onError]; without it, the first one is rethrown once
+  /// every key has been tried.
+  ///
   /// Each move writes the version, then the state, then deletes the old
   /// keys, so it is safe to run again after a crash. Call it at startup,
   /// before constructing the stores.
   static Future<Map<String, String>> moveTokens(
     String? Function(String token, Object? Function() value) to, {
     Storage? storage,
+    void Function(String token, Object error, StackTrace stackTrace)? onError,
   }) async {
     final target = storage ?? HydratedMobX.storage;
-    final live = liveTokens(storage: target);
+    // Unwrapped, so a store bound to the inner storage of a wrapper counts.
+    final live = liveTokens(storage: _unwrapped(target));
     final existing = target.keys.toSet();
     final planned = <String, String>{};
     final targets = <String>{};
     final clashing = <String>{};
+    final failures = _Failures(onError);
     for (final key in existing) {
       if (isVersionKey(key) || live.contains(key)) continue;
       // Read at most once per call of [to], and not kept after it: holding
@@ -209,16 +217,27 @@ abstract class HydratedMobX with Store {
       // encoded box or a FileStorage exists to avoid.
       Object? value;
       var read = false;
-      final next = to(key, () {
-        if (!read) {
-          value = target.read(key);
-          read = true;
-        }
-        return value;
-      });
+      final String? next;
+      try {
+        next = to(key, () {
+          if (!read) {
+            value = target.read(key);
+            read = true;
+          }
+          return value;
+        });
+      } catch (error, stackTrace) {
+        failures.add(key, error, stackTrace);
+        continue;
+      }
       if (next == null || next == key || live.contains(next)) continue;
       if (isVersionKey(next)) {
-        throw ArgumentError.value(next, 'to', 'returned a version key');
+        failures.add(
+          key,
+          ArgumentError.value(next, 'to', 'returned a version key'),
+          StackTrace.current,
+        );
+        continue;
       }
       if (!targets.add(next)) clashing.add(next);
       planned[key] = next;
@@ -226,30 +245,165 @@ abstract class HydratedMobX with Store {
     final moved = <String, String>{};
     for (final MapEntry(key: from, value: next) in planned.entries) {
       if (clashing.contains(next) || planned.containsKey(next)) continue;
-      final value = target.read(from);
-      // Gone since the keys were listed: deleted, or behind a queued delete.
-      if (value == null) continue;
-      final fromVersion = versionKeyOf(from);
-      if (existing.contains(next)) {
-        if (!_jsonEquals(target.read(next), value) ||
-            target.read(versionKeyOf(next)) != target.read(fromVersion)) {
-          continue;
-        }
-      } else {
-        final version = target.read(fromVersion);
-        if (version != null) {
-          await target.write(versionKeyOf(next), version);
-        } else {
-          // An absent key reads as version 1; drop one left behind.
-          await target.delete(versionKeyOf(next));
-        }
-        await target.write(next, value);
+      try {
+        final done = await _moveOne(
+          source: target,
+          from: from,
+          value: target.read(from),
+          target: target,
+          to: next,
+          exists: existing.contains(next),
+        );
+        if (done) moved[from] = next;
+      } catch (error, stackTrace) {
+        failures.add(from, error, stackTrace);
       }
-      await target.deleteAll([from, fromVersion]);
-      moved[from] = next;
     }
+    failures.rethrowFirst();
     return moved;
   }
+
+  /// Moves the state [value] of token [from] in [source] to token [to] in
+  /// [target], with its version key and use time, and returns whether it
+  /// did. [exists] says whether [target] holds [to] already; then only the
+  /// same state under the same version counts as moved, and is deleted from
+  /// [source]. A [value] of `null` is nothing to move.
+  ///
+  /// Writes the version, then the state, then deletes [from], so a crash
+  /// leaves the state in one place or both, and running again finishes. A
+  /// failed write takes back what it wrote to [to] before rethrowing.
+  static Future<bool> _moveOne({
+    required Storage source,
+    required String from,
+    required Object? value,
+    required Storage target,
+    required String to,
+    required bool exists,
+  }) async {
+    // Gone since the keys were listed: deleted, or behind a queued delete.
+    if (value == null) return false;
+    final fromVersion = versionKeyOf(from);
+    final toVersion = versionKeyOf(to);
+    final version = source.read(fromVersion);
+    if (exists) {
+      if (!_jsonEquals(target.read(to), value) ||
+          target.read(toVersion) != version) {
+        return false;
+      }
+      // A run that stopped after the state write left [to] the time of
+      // that write.
+      await _carryUseTime(source, from, target, to);
+    } else {
+      try {
+        if (version != null) {
+          await target.write(toVersion, version);
+        } else {
+          // An absent key reads as version 1; drop one left behind.
+          await target.delete(toVersion);
+        }
+        await target.write(to, value);
+      } catch (_) {
+        // A version key on its own would date state written there later.
+        await Future.sync(() => target.deleteAll([to, toVersion]))
+            .catchError((Object _) {});
+        rethrow;
+      }
+      await _carryUseTime(source, from, target, to);
+    }
+    await source.deleteAll([from, fromVersion]);
+    return true;
+  }
+
+  /// Gives [to] in [target] the use time of [from] in [source], when both
+  /// keep use times. Best effort, like every use time: the state is already
+  /// in [target], and failing the move now would leave it in both storages,
+  /// so a use time that cannot be carried only makes [to] look used at the
+  /// move.
+  static Future<void> _carryUseTime(
+    Storage source,
+    String from,
+    Storage target,
+    String to,
+  ) async {
+    if (source is UseTimeStorage && target is UseTimeStorage) {
+      try {
+        if (source.usedAt(from) case final usedAt?) {
+          await target.setUsedAt(to, usedAt);
+        }
+      } on Object {
+        // See above.
+      }
+    }
+  }
+
+  /// Moves the state of every token that passes [where] from storage [from]
+  /// into [to], with its version key and, between storages that keep them
+  /// ([UseTimeStorage]), its use time, e.g. per-document state from a Hive
+  /// box into a `FileStorage`. Returns the tokens moved.
+  ///
+  /// A token [to] already holds with different state, or with the same
+  /// state under another version, stays in [from]; one it holds with the
+  /// same state and version is only deleted from [from]. Tokens of live
+  /// stores bound to either storage are skipped.
+  ///
+  /// A token that fails, in [where] or in its move, stays in [from], and the
+  /// others still move. Each failure goes to [onError]; without it, the
+  /// first one is rethrown once every token has been tried.
+  ///
+  /// Each token is written to [to] (version, then state) before it is
+  /// deleted from [from], so a crash leaves it in one storage or both, never
+  /// in neither, and running again finishes the move. Call it at startup,
+  /// before constructing the stores.
+  ///
+  /// Throws an [ArgumentError] when [from] and [to] are the same storage,
+  /// also when one wraps the other ([ForwardingStorage]): the move would
+  /// delete every token it wrote.
+  static Future<Set<String>> transferTokens({
+    required Storage from,
+    required Storage to,
+    required bool Function(String token) where,
+    void Function(String token, Object error, StackTrace stackTrace)? onError,
+  }) async {
+    if (identical(_unwrapped(from), _unwrapped(to))) {
+      throw ArgumentError.value(to, 'to', 'is the same storage as from');
+    }
+    // Unwrapped, so a store bound to the inner storage of a wrapper counts.
+    final live = {
+      ...liveTokens(storage: _unwrapped(from)),
+      ...liveTokens(storage: _unwrapped(to)),
+    };
+    final targetKeys = to.keys.toSet();
+    final moved = <String>{};
+    final failures = _Failures(onError);
+    final tokens = [
+      for (final key in from.keys)
+        if (!isVersionKey(key) && !live.contains(key)) key,
+    ];
+    for (final token in tokens) {
+      try {
+        if (!where(token)) continue;
+        final done = await _moveOne(
+          source: from,
+          from: token,
+          value: from.read(token),
+          target: to,
+          to: token,
+          exists: targetKeys.contains(token),
+        );
+        if (done) moved.add(token);
+      } catch (error, stackTrace) {
+        failures.add(token, error, stackTrace);
+      }
+    }
+    failures.rethrowFirst();
+    return moved;
+  }
+
+  /// The storage [storage] writes into, through any [ForwardingStorage]s.
+  static Storage _unwrapped(Storage storage) => switch (storage) {
+        final ForwardingStorage wrapper => _unwrapped(wrapper.inner),
+        _ => storage,
+      };
 
   /// Wipes persisted state from [storage] (the global one by default).
   ///
@@ -258,9 +412,10 @@ abstract class HydratedMobX with Store {
   /// them writes its state back, and any write it had pending is dropped.
   ///
   /// - With [where] `null`, the whole storage is cleared.
-  /// - Otherwise only the keys whose token passes [where] are deleted, in one
-  ///   [Storage.deleteAll], with their version keys; every other key is left
-  ///   untouched. Keys that no store owns are tested by their raw name.
+  /// - Otherwise only the keys whose token passes [where] are deleted, with
+  ///   their version keys, in one call of [Storage.deleteAll], which is as
+  ///   atomic as that storage makes it; every other key is left untouched.
+  ///   Keys that no store owns are tested by their raw name.
   ///
   /// With [resume] `true`, the suspended stores start persisting again
   /// afterwards and write their current state back.
@@ -320,7 +475,8 @@ abstract class HydratedMobX with Store {
   ///
   /// [to] built with `maxAge` or `maxEntries` evicts before the stores move
   /// over, so a store whose key it evicted would write it back. Build [to]
-  /// with `trackUse: true` instead, rebind, then call `evict`.
+  /// without them (with `trackUse: true` for a [HydratedStorage]), rebind,
+  /// then call `evict`.
   static void rebindAll({required Storage from, required Storage to}) {
     for (final store in _live(from, throughWrappers: false)) {
       store
@@ -352,6 +508,15 @@ abstract class HydratedMobX with Store {
 
   static final Finalizer<WeakReference<HydratedMobX>> _finalizer =
       Finalizer<WeakReference<HydratedMobX>>(_instances.remove);
+
+  /// State writes whose version stamp has not landed yet, by storage and
+  /// token. A storage shows a write from the moment it is called, but the
+  /// stamp is written only once the state has landed, so a store built in
+  /// between would read the new state under the old version and migrate it
+  /// again. Kept under the storage at the bottom of any wrappers, which
+  /// every store writing into it reads through.
+  static final _stamping =
+      Expando<Map<String, List<({Object json, int version})>>>();
 
   /// Live stores bound to [storage], or all of them when it is `null`.
   /// With [throughWrappers], a store bound to a [ForwardingStorage] that
@@ -530,7 +695,8 @@ abstract class HydratedMobX with Store {
   void _readStored(Storage target) {
     try {
       // The persistence run stamps [version] only after the state that
-      // produced it has been written, so the version never leads the state.
+      // produced it has been written, so the version never leads the state;
+      // [_restore] reads state whose stamp is still to come as that version.
       final rawVersion = target.read(_versionToken);
       if (rawVersion != null && rawVersion is! int) {
         log(
@@ -559,7 +725,8 @@ abstract class HydratedMobX with Store {
     }
     // Data written before schema versioning existed has no version key and
     // is treated as version 1.
-    final storedVersion = _lastStampedVersion ?? 1;
+    final storedVersion =
+        _stampingVersion(target, stored) ?? _lastStampedVersion ?? 1;
     Map<String, dynamic>? json = plainJson(stored)! as Map<String, dynamic>;
     if (storedVersion < version) {
       json = migrate(storedVersion, json);
@@ -580,6 +747,36 @@ abstract class HydratedMobX with Store {
     // The storage's own value, not the copy fromJson may keep and mutate.
     if (storedVersion == version) _lastPersisted = stored;
     if (storedVersion < version) _notifyMigrated(storedVersion);
+  }
+
+  /// The version [stored] is about to be stamped with, when it is the state
+  /// of a write into [target], or the storage it wraps, whose stamp has not
+  /// landed yet.
+  int? _stampingVersion(Storage target, Object stored) {
+    final writes = _stamping[_unwrapped(target)]?[storageToken];
+    if (writes == null) return null;
+    for (final write in writes.reversed) {
+      if (_jsonEquals(write.json, stored)) return write.version;
+    }
+    return null;
+  }
+
+  /// Records that [json] is being written to [target] with a version stamp
+  /// to follow, and returns the function that forgets it again.
+  void Function() _startStamp(Storage target, Map<String, dynamic> json) {
+    final write = (json: json as Object, version: version);
+    final token = storageToken;
+    final storage = _unwrapped(target);
+    final byToken = _stamping[storage] ??= {};
+    (byToken[token] ??= []).add(write);
+    return () {
+      final writes = byToken[token]!..remove(write);
+      if (writes.isNotEmpty) return;
+      byToken.remove(token);
+      if (byToken.isEmpty && identical(_stamping[storage], byToken)) {
+        _stamping[storage] = null;
+      }
+    };
   }
 
   /// Tells the observer, once the store holds the migrated state; a failing
@@ -657,6 +854,7 @@ abstract class HydratedMobX with Store {
     final target = _boundStorage!;
     var done = Future.sync(() => target.write(storageToken, json));
     if (stamp) {
+      final stamped = _startStamp(target, json);
       // Stamp the version only after the state write succeeds, so a failure
       // or crash leaves the version behind the state (which re-runs
       // migration) rather than ahead of it (which would skip one).
@@ -669,7 +867,7 @@ abstract class HydratedMobX with Store {
           // change, and not after a clear that reset it meanwhile.
           if (generation == _clearGeneration) _lastStampedVersion = version;
         });
-      });
+      }).whenComplete(stamped);
     }
     return done.catchError((Object error, StackTrace stackTrace) {
       // Write the same state again on the next run.
@@ -1077,3 +1275,28 @@ typedef OnHydrationError = HydrationErrorBehavior Function(
 
 /// Signature for a store's own handler of failed state writes.
 typedef OnStorageError = void Function(Object error, StackTrace stackTrace);
+
+/// The failures of a run of token moves: each goes to [_onError], or the
+/// first is kept to rethrow once every token has been tried.
+class _Failures {
+  _Failures(this._onError);
+
+  final void Function(String token, Object error, StackTrace stackTrace)?
+      _onError;
+  (Object, StackTrace)? _first;
+
+  void add(String token, Object error, StackTrace stackTrace) {
+    final onError = _onError;
+    if (onError != null) {
+      onError(token, error, stackTrace);
+    } else {
+      _first ??= (error, stackTrace);
+    }
+  }
+
+  void rethrowFirst() {
+    if (_first case (final error, final stackTrace)) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  }
+}

@@ -626,6 +626,45 @@ void main() {
       await account.close();
     });
 
+    test('reads and keys show a write queued behind the lock', () async {
+      final disk = await build();
+      await disk.write('a', 1);
+      // Holds the lock, so the writes after it queue.
+      final busy = disk.write('busy', 1);
+      final queued = [disk.write('a', 2), disk.write('b', 1)];
+
+      expect(disk.read('a'), 2);
+      expect(disk.read('b'), 1);
+      expect(disk.keys.toSet(), {'a', 'b', 'busy'});
+      queued.add(disk.deleteAll(['b']));
+      expect(disk.read('b'), isNull);
+
+      await Future.wait([busy, ...queued]);
+      expect(disk.keys.toSet(), {'a', 'busy'});
+      expect(disk.read('a'), 2);
+      await disk.close();
+    });
+
+    test(
+        'a store rebuilt before its migration is stamped is not migrated '
+        'again', () async {
+      final disk = await build();
+      await disk.write('migrating', {'old': 3}); // Version 1 data.
+      // Writes the migrated state, then stamps version 2 once it lands.
+      final first = _Migrating(storage: disk);
+      expect(first.count, 3);
+      first.dispose();
+
+      final second = _Migrating(storage: disk);
+      addTearDown(second.dispose);
+      expect(second.count, 3);
+      await first.flush();
+      await second.flush();
+      expect(disk.read('migrating'), {'count': 3});
+      expect(disk.read(HydratedMobX.versionKeyOf('migrating')), 2);
+      await disk.close();
+    });
+
     test('a store built while a delete waits does not hydrate its value',
         () async {
       final disk = await build();
@@ -638,7 +677,9 @@ void main() {
 
       final store = _Counter(storage: disk);
       expect(store.count, 0);
-      expect(disk.keys, isNot(contains('counter')));
+      // The store's first write is queued after the delete, so it is what
+      // the key reads as now.
+      expect(disk.read('counter'), {'count': 0});
       expect(disk.read('other'), 1);
 
       await busy;
@@ -665,6 +706,19 @@ void main() {
 
       expect(disk.keys, ['c']);
       expect(disk.read('c'), 3);
+      await disk.close();
+    });
+
+    test('a key a queued delete hides has no use time', () async {
+      final disk = await build();
+      await disk.write('a', 1);
+      expect(disk.usedAt('a'), isNotNull);
+      // Holds the lock, so the delete waits.
+      final busy = disk.write('busy', 1);
+      final deleting = disk.deleteAll(['a']);
+
+      expect(disk.usedAt('a'), isNull);
+      await Future.wait([busy, deleting]);
       await disk.close();
     });
 
@@ -946,6 +1000,38 @@ void main() {
       await disk.close();
     });
 
+    test('usedAt and setUsedAt, and moveTokens keeps use times', () async {
+      final disk = await build();
+      await disk.write('old_1', {'count': 1});
+      expect(disk.usedAt('old_1'), now);
+      await disk.setUsedAt('old_1', DateTime(2025));
+      await disk.setUsedAt('absent', DateTime(2025));
+      expect(disk.usedAt('old_1'), DateTime(2025));
+      expect(disk.usedAt('absent'), isNull);
+
+      now = now.add(const Duration(days: 1));
+      await HydratedMobX.moveTokens(
+        (token, _) => token.replaceFirst('old_', 'new_'),
+        storage: disk,
+      );
+      expect(disk.usedAt('new_1'), DateTime(2025));
+
+      await disk.setUsedAt('new_1', DateTime(2030));
+      expect(disk.usedAt('new_1'), now);
+      await disk.close();
+
+      final untracked = await build(trackUse: false);
+      await untracked.write('k', 1);
+      await untracked.setUsedAt('k', DateTime(2025));
+      expect(untracked.usedAt('k'), isNull);
+      await untracked.close();
+    });
+
+    test('build rejects a bad maxEntries before opening the box', () async {
+      expect(() => build(maxEntries: -1), throwsArgumentError);
+      expect(dir.listSync(), isEmpty);
+    });
+
     test('an initialUseTime that throws counts as used at build', () async {
       final hive = Hive..init(dir.path);
       final legacy = await hive.openBox<dynamic>('throwing');
@@ -962,6 +1048,7 @@ void main() {
       );
 
       expect(disk.keys, ['undated']);
+      expect(disk.usedAt('undated'), now);
       await disk.close();
     });
 
@@ -1255,7 +1342,7 @@ class _ThrowingMigrateObserver extends HydratedObserver {
 
 /// Version 2 store renaming `old` to `count`.
 class _Migrating extends HydratedMobX with Store {
-  _Migrating({super.onStorageError});
+  _Migrating({super.onStorageError, super.storage});
 
   final Observable<int> _count = Observable(0);
 

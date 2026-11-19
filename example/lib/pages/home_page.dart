@@ -5,6 +5,7 @@ import 'encryption_page.dart';
 import 'eviction_page.dart';
 import 'inspector_page.dart';
 import 'keyed_page.dart';
+import 'large_state_page.dart';
 import 'migration_page.dart';
 import 'namespaces_page.dart';
 import 'observer_page.dart';
@@ -75,7 +76,7 @@ const _kDemos = [
     'inspector',
     Icons.manage_search,
     'Storage inspector',
-    'Every key in every box, live',
+    'Every key in every storage, live',
     InspectorPage(),
   ),
   _Demo(
@@ -92,6 +93,13 @@ const _kDemos = [
     'Skip the traversal for plain-JSON state',
     TrustJsonPage(),
   ),
+  _Demo(
+    'large',
+    Icons.description_outlined,
+    'Large state',
+    'Gzipped values in a box, one file per key with FileStorage',
+    LargeStatePage(),
+  ),
 ];
 
 class HomePage extends StatelessWidget {
@@ -100,7 +108,7 @@ class HomePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('hydrated_mobx 2.0')),
+      appBar: AppBar(title: const Text('hydrated_mobx 3.0')),
       body: ListView.separated(
         padding: const EdgeInsets.symmetric(vertical: 8),
         itemCount: _kDemos.length,

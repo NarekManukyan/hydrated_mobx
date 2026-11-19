@@ -7,14 +7,16 @@ import 'demo_page.dart';
 
 const _kRefresh = Duration(milliseconds: 500);
 
-/// The keys and values a box holds, re-read twice a second so writes,
-/// deletes and evictions show up as they happen.
-class LiveBoxKeys extends StatefulWidget {
-  const LiveBoxKeys({
+/// The keys a storage holds, and their values unless [showValues] is off,
+/// re-read twice a second so writes, deletes and evictions show up as they
+/// happen.
+class LiveStorageKeys extends StatefulWidget {
+  const LiveStorageKeys({
     super.key,
     required this.title,
     required this.storage,
     this.onDelete,
+    this.showValues = true,
   });
 
   final String title;
@@ -26,11 +28,15 @@ class LiveBoxKeys extends StatefulWidget {
   /// token, state and version.
   final void Function(String key)? onDelete;
 
+  /// Whether to read and show each value. Off for storages of large state,
+  /// where reading every value twice a second would decode all of it.
+  final bool showValues;
+
   @override
-  State<LiveBoxKeys> createState() => _LiveBoxKeysState();
+  State<LiveStorageKeys> createState() => _LiveStorageKeysState();
 }
 
-class _LiveBoxKeysState extends State<LiveBoxKeys> {
+class _LiveStorageKeysState extends State<LiveStorageKeys> {
   late final Timer _timer;
 
   @override
@@ -61,7 +67,7 @@ class _LiveBoxKeysState extends State<LiveBoxKeys> {
         for (final key in keys)
           KeyValueTile(
             storageKey: key,
-            value: storage.read(key),
+            value: widget.showValues ? storage.read(key) : '(not read)',
             trailing: widget.onDelete == null
                 ? null
                 : IconButton(

@@ -32,3 +32,6 @@ build/
 
 # Local code-review memory (not part of the package)
 .review-memory/
+
+# Local planning notes, never published.
+doc/memory-footprint-plan.md

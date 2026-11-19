@@ -8,6 +8,10 @@
 //     ENCODING=$e dart run --enable-vm-service=0 \
 //       --disable-service-auth-codes benchmark/memory_benchmark.dart
 //   done
+// STORAGE=file measures a FileStorage instead, reading every note from disk.
+// Its ENCODING is json or gzipJson (the default for files):
+//   STORAGE=file dart run --enable-vm-service=0 \
+//     --disable-service-auth-codes benchmark/memory_benchmark.dart
 // ignore_for_file: avoid_print
 
 import 'dart:async';
@@ -16,6 +20,7 @@ import 'dart:developer';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:hydrated_mobx/file_storage.dart';
 import 'package:hydrated_mobx/hydrated_mobx.dart';
 
 const _notes = 200;
@@ -98,35 +103,41 @@ class _Vm {
 }
 
 Future<void> main() async {
+  final files = Platform.environment['STORAGE'] == 'file';
+  // A file holds bytes, so tree is not an encoding a FileStorage takes.
   final encoding = HydratedEncoding.values.byName(
-    Platform.environment['ENCODING'] ?? HydratedEncoding.tree.name,
+    Platform.environment['ENCODING'] ??
+        (files ? HydratedEncoding.gzipJson : HydratedEncoding.tree).name,
   );
   final dir = await Directory.systemTemp.createTemp('hydrated_memory_');
   final directory = HydratedStorageDirectory(dir.path);
   final vm = await _Vm.connect();
+  Future<Storage> open() => files
+      ? FileStorage.build(
+          storageDirectory: directory,
+          encoding: encoding,
+          cacheBytes: 0,
+        )
+      : HydratedStorage.build(storageDirectory: directory, encoding: encoding);
 
   var utf8Bytes = 0;
   final random = Random(7);
-  final writer = await HydratedStorage.build(
-    storageDirectory: directory,
-    encoding: encoding,
-  );
+  final writer = await open();
   for (var n = 0; n < _notes; n++) {
     final note = _note(n, random);
     utf8Bytes += utf8.encode(jsonEncode(note)).length;
     await writer.write('note_$n', note);
   }
   await writer.close();
-  final fileMb =
-      File('${dir.path}/${HydratedStorage.defaultBoxName}.hive').lengthSync() /
-          1048576;
+  final fileMb = [
+        for (final entry in dir.listSync())
+          if (entry is File) entry.lengthSync(),
+      ].fold<int>(0, (a, b) => a + b) /
+      1048576;
 
   final before = await vm.heapMb();
   final watch = Stopwatch()..start();
-  final storage = await HydratedStorage.build(
-    storageDirectory: directory,
-    encoding: encoding,
-  );
+  final storage = await open();
   final openMs = watch.elapsedMilliseconds;
   final heldMb = await vm.heapMb() - before;
 
@@ -138,7 +149,7 @@ Future<void> main() async {
 
   final jsonMb = utf8Bytes / 1048576;
   print(
-    '${encoding.name.padRight(8)} '
+    '${files ? 'file' : 'box '} ${encoding.name.padRight(8)} '
     'heap +${heldMb.toStringAsFixed(1)} MB '
     '(${(heldMb / jsonMb).toStringAsFixed(2)}x the JSON) | '
     'file ${fileMb.toStringAsFixed(1)} MB | open $openMs ms | '
