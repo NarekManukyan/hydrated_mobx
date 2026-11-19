@@ -52,7 +52,39 @@ class _VanishingStorage extends ForwardingStorage {
   dynamic read(String key) => gone.contains(key) ? null : super.read(key);
 }
 
+/// Fails every write, and throws from `deleteAll` before returning a future.
+class _BrokenStorage extends ForwardingStorage {
+  _BrokenStorage(super.inner);
+
+  @override
+  Future<void> write(String key, dynamic value) =>
+      Future.error(StateError('write failed'));
+
+  @override
+  Future<void> deleteAll(Iterable<String> keys) =>
+      throw StateError('delete failed');
+}
+
 void main() {
+  test('a failed move reports the write that failed', () async {
+    final from = InMemoryStorage({
+      'a': {'count': 1},
+    });
+    final errors = <Object>[];
+    final moved = await HydratedMobX.transferTokens(
+      from: from,
+      to: _BrokenStorage(InMemoryStorage()),
+      where: (_) => true,
+      onError: (_, error, __) => errors.add(error),
+    );
+
+    expect(moved, isEmpty);
+    expect(errors, [
+      isA<StateError>().having((e) => e.message, 'message', 'write failed'),
+    ]);
+    expect(from.read('a'), {'count': 1});
+  });
+
   group('moveTokens', () {
     test('moves state with its version key and returns the moves', () async {
       final storage = InMemoryStorage({
@@ -231,16 +263,71 @@ void main() {
       expect(storage.reads, isNot(contains('other')));
     });
 
-    test('rejects a version key as the new token', () {
-      final storage = InMemoryStorage({'old': 1});
+    test('a key that fails stays, the rest move, and the error is reported',
+        () async {
+      final storage = InMemoryStorage({
+        'old_1': {'count': 1},
+        'old_2': {'count': 2},
+        'old_3': {'count': 3},
+      });
+      String? to(String token, Object? Function() value) {
+        if (token == 'old_2') throw const FormatException('unreadable');
+        return token.startsWith('old_') ? 'new_${token.substring(4)}' : null;
+      }
 
-      expect(
-        () => HydratedMobX.moveTokens(
-          (_, __) => 'new.__version',
-          storage: storage,
-        ),
+      final errors = <String>[];
+      final moved = await HydratedMobX.moveTokens(
+        to,
+        storage: storage,
+        onError: (token, _, __) => errors.add(token),
+      );
+      expect(moved, {'old_1': 'new_1', 'old_3': 'new_3'});
+      expect(errors, ['old_2']);
+
+      // Without onError the first failure is rethrown, after the others.
+      await storage.write('old_4', {'count': 4});
+      await expectLater(
+        HydratedMobX.moveTokens(to, storage: storage),
+        throwsFormatException,
+      );
+      expect(storage.keys.toSet(), {'new_1', 'old_2', 'new_3', 'new_4'});
+    });
+
+    test('a version key as the new token fails only that key', () async {
+      final storage = InMemoryStorage({'old': 1, 'other': 2});
+      String? to(String token, Object? Function() _) =>
+          token == 'old' ? 'new.__version' : 'moved';
+
+      final errors = <Object>[];
+      final moved = await HydratedMobX.moveTokens(
+        to,
+        storage: storage,
+        onError: (token, error, _) => errors.add(error),
+      );
+      expect(moved, {'other': 'moved'});
+      expect(errors, [isArgumentError]);
+      expect(storage.keys.toSet(), {'old', 'moved'});
+
+      await expectLater(
+        HydratedMobX.moveTokens(to, storage: storage),
         throwsArgumentError,
       );
+    });
+
+    test('skips live stores bound to the storage a wrapper wraps', () async {
+      final inner = InMemoryStorage({
+        'counterx': {'count': 1},
+      });
+      final store = _Counter(storage: inner, storeId: 'x');
+      addTearDown(store.dispose);
+
+      final moved = await HydratedMobX.moveTokens(
+        (_, __) => 'new',
+        storage: ForwardingStorage(inner),
+      );
+
+      expect(moved, isEmpty);
+      expect(inner.keys, ['counterx']);
     });
   });
 

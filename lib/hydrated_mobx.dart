@@ -6,6 +6,7 @@
 library hydrated_mobx;
 
 export 'src/hydrated_cipher.dart';
+export 'src/hydrated_encoding.dart' show HydratedEncoding;
 export 'src/hydrated_json.dart';
 export 'src/hydrated_mobx.dart' hide NIL;
 export 'src/hydrated_storage.dart';
