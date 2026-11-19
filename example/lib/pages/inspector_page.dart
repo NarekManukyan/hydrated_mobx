@@ -3,7 +3,7 @@ import 'package:hydrated_mobx/hydrated_mobx.dart';
 
 import '../app/app_storages.dart';
 import '../widgets/demo_page.dart';
-import '../widgets/live_box_keys.dart';
+import '../widgets/live_storage_keys.dart';
 
 class InspectorPage extends StatelessWidget {
   const InspectorPage({super.key});
@@ -13,18 +13,20 @@ class InspectorPage extends StatelessWidget {
     return DemoPage(
       title: 'Storage inspector',
       explainer:
-          'Every key in every box, live, via Storage.keys. Deleting '
-          'goes through HydratedMobX.deleteToken, which also removes the '
+          'Every key in every storage, live, via Storage.keys; large '
+          'storages list keys only. Deleting goes through '
+          'HydratedMobX.deleteToken, which also removes the '
           "key's version and stops a live store from writing it back.",
       children: [
-        for (final MapEntry(key: name, value: storage)
+        for (final MapEntry(key: name, value: (:storage, :large))
             in appStorages.all.entries)
           Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              LiveBoxKeys(
+              LiveStorageKeys(
                 title: name,
                 storage: storage,
+                showValues: !large,
                 onDelete: (key) => HydratedMobX.deleteToken(
                   HydratedMobX.tokenOfKey(key),
                   storage: storage(),

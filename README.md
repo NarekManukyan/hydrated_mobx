@@ -15,9 +15,9 @@ says how to turn its state into JSON and back, and survives app restarts.
 | <img src="doc/screenshots/03_write_stats.webp" width="220" alt="Write stats"> | <img src="doc/screenshots/04_namespaces.webp" width="220" alt="Namespaces"> | <img src="doc/screenshots/05_migration.webp" width="220" alt="Schema migration"> |
 | Writes saved by `persistDelay` and change detection | Session and account boxes | `migrate` renames a field |
 | <img src="doc/screenshots/06_eviction.webp" width="220" alt="Eviction"> | <img src="doc/screenshots/07_observer.webp" width="220" alt="Observer"> | <img src="doc/screenshots/08_inspector.webp" width="220" alt="Storage inspector"> |
-| `maxEntries` keeps the 5 latest | One observer for every store | Every key in every box |
+| `maxEntries` keeps the 5 latest | One observer for every store | Every key in every storage |
 
-The screens come from the [example app](example), one per feature.
+The screens come from the [example app](example), one per feature area.
 
 ## Features
 
@@ -28,8 +28,12 @@ The screens come from the [example app](example), one per feature.
   written, and neither is the state a store just hydrated.
 - **Several storages:** one Hive box per namespace (session, account, cache),
   each store bound to the one it belongs in.
-- **Targeted clearing:** `clearAll(where:)` deletes only the tokens you name, in
-  one operation, and stops their stores first.
+- **Targeted clearing:** `clearAll(where:)` deletes only the tokens you name,
+  in one `deleteAll` (one Hive operation for a `HydratedStorage`), and stops
+  their stores first.
+- **Memory:** `encoding: HydratedEncoding.gzipJson` keeps large state as
+  bytes, not decoded trees, until a store hydrates it; `FileStorage` keeps
+  per-id state on disk until it is used.
 - **Eviction:** `maxAge` and `maxEntries` keep per-id caches from growing
   forever.
 - **Schema versions:** `version` + `migrate`, which can also drop old data.
@@ -50,11 +54,25 @@ The screens come from the [example app](example), one per feature.
 | One change to a 2000-row state, time blocking the caller | 1.15 ms | 0.97 ms, **0.41 ms** with `trustToJson` |
 | 500 per-id cache keys | kept forever | **50** kept with `maxEntries: 50` |
 
+`benchmark/memory_benchmark.dart` measures what an open storage costs in
+memory. 200 note-sized states (900 transcript segments each, 28.7 MB of JSON),
+none of them hydrated, Dart 3.13 JIT on an M4 Pro, the median of three runs:
+
+| Storage | Heap held | On disk | Open | Read, per note |
+| --- | --- | --- | --- | --- |
+| `HydratedStorage`, `tree` (default) | 146 MB | 34.9 MB | 248 ms | 0 ms |
+| `HydratedStorage`, `json` | 29 MB | 28.7 MB | 89 ms | 0.52 ms |
+| `HydratedStorage`, `gzipJson` | 4.0 MB | 4.0 MB | 15 ms | 0.57 ms |
+| `FileStorage`, `gzipJson` | **1.4 MB** | 4.0 MB | 4 ms | 0.60 ms, from disk |
+
+Heap figures vary by about a megabyte from run to run, so the `FileStorage`
+figure is within noise of nothing held.
+
 ## Getting started
 
 ```yaml
 dependencies:
-  hydrated_mobx: ^2.0.0
+  hydrated_mobx: ^3.0.0
 ```
 
 Build the storage before `runApp`:
@@ -349,6 +367,111 @@ attachments would go with the evicted ones.
 
 `compactionStrategy` tunes when Hive rewrites the box file.
 
+## Memory
+
+Hive keeps every value of an open box in memory, decoded, for as long as the
+box is open, whether or not a store ever reads it. A decoded JSON tree takes
+about five times the memory of its text, so a box of large per-id states (one
+per document, say) can cost hundreds of MB at launch. `encoding` keeps large
+state as bytes instead and decodes it when a store hydrates:
+
+```dart
+final documents = await HydratedStorage.build(
+  storageDirectory: directory,
+  boxName: 'documents',
+  encoding: HydratedEncoding.gzipJson,
+  encodeAbove: 16 * 1024, // state up to this size stays as it is (the default)
+);
+```
+
+- `tree` (the default) keeps maps and lists as they are.
+- `json` keeps UTF-8 JSON, about a fifth of the memory.
+- `gzipJson` keeps gzipped JSON, a few percent of it, and a much smaller file.
+  It is not available on the web.
+
+Each `read` decodes again, so a store's hydration costs a fraction of a
+millisecond per 100 KB. Every value reads back whatever the setting, so it can
+change between launches. The first build after `encoding` or `encodeAbove`
+changes converts what is already in the box, back to `tree` too; later builds
+skip that walk. A live store also keeps the decoded state it last hydrated or
+wrote, to skip unchanged writes, so encoding saves the memory of state whose
+store does not exist, not of the one on screen. Do not let a version of
+hydrated_mobx before 3.0 open an encoded box: it cannot read the encoded
+values, and its stores would overwrite them.
+
+### One file per key
+
+Encoded state is small, but a box still holds all of it. For per-id state
+that only matters while its screen is open, `FileStorage` keeps each key in a
+file and holds nothing in memory until a store reads it:
+
+```dart
+import 'package:hydrated_mobx/file_storage.dart';
+
+final notes = await FileStorage.build(
+  storageDirectory: HydratedStorageDirectory('${support.path}/notes'),
+  maxEntries: 50, // optional, as with HydratedStorage
+);
+
+// Before showing a note: read it ahead, so the store hydrates from memory.
+await notes.preload('note_$id');
+final store = NoteStore(id, storage: notes);
+```
+
+- Opening lists the directory and reads no file. With `maxAge` or
+  `maxEntries` it also evicts, which reads the modification time of every
+  file `evictable` accepts: one `stat` per file, at each launch, run in a
+  background isolate.
+- `read` stays synchronous. A key that was not preloaded or used lately is
+  read from its file there and then, which blocks for that read (0.6 ms for
+  a 146 KB note in the benchmark, on a Mac; measure on your devices).
+- The last `cacheBytes` (8 MB by default) of encoded values read or written
+  stay in memory. A value larger than that is never kept, so `preload` skips
+  it and the store reads it from its file.
+- A write goes to a temporary file that is renamed over the old one, so a
+  crash keeps the old value or the new one. `deleteAll` and `clear` delete
+  one file at a time, each state key before its version key: a crash midway
+  leaves some keys, never state without its version.
+- Eviction (`maxAge`, `maxEntries`, `evict`) works as with `HydratedStorage`,
+  using each file's modification time as its use time.
+- Files are not encrypted. Keep secrets in an encrypted `HydratedStorage`.
+- One storage at a time may have a directory open. A second `build` on it,
+  from the same isolate or another process (an app extension sharing an app
+  group, say), throws a `StateError` until the first is closed. Isolates of
+  one process share its file lock, so a second isolate of the app is not
+  caught: keep each directory to one isolate.
+- The storage holds that lock until it is closed. iOS terminates a
+  suspended app that holds a file lock in an app-group container, so a
+  `FileStorage` kept there must be closed when the app goes to the
+  background and built again when it returns. Live stores stay bound to the
+  closed storage, so flush them before closing and move them to the new one
+  with `rebindAll`, then evict, as in
+  [Rebuilding a storage](#rebuilding-a-storage). A directory inside the
+  app's own container is not affected.
+- File names are the key in lowercase base32, so keys that differ only in
+  case stay apart on macOS and Windows. A state key can be up to 144 bytes
+  of UTF-8, which leaves room for its version key.
+- It is not available on the web, so it has its own import.
+
+`HydratedMobX.transferTokens` moves existing state over, once, at startup:
+
+```dart
+await HydratedMobX.transferTokens(
+  from: HydratedMobX.storage, // the Hive box
+  to: notes,
+  where: (token) => token.startsWith('note_'),
+  onError: (token, error, stackTrace) => log('kept $token: $error'),
+);
+```
+
+Each token is written to the new storage before it is deleted from the old
+one, so an interrupted run loses nothing and the next launch finishes it. A
+token that fails to move stays where it was while the others move; without
+`onError` the first failure is rethrown once all were tried. Use times move
+along between storages that keep them, so a `maxEntries` on the new storage
+keeps the notes used last. Both sides must be different storages. Moving
+state out of an encrypted box into a `FileStorage` writes it unencrypted.
+
 ## Schema versions
 
 Bump `version` when the shape of `toJson` changes, and upgrade older data in
@@ -402,7 +525,8 @@ HydratedMobX.storage = await HydratedStorage.build(
 ```
 
 Hive encrypts values, not keys: a store's token (`storagePrefix` plus its id)
-is readable in the box file. Keep secrets out of `storeId`s.
+is readable in the box file. Keep secrets out of `storeId`s. `FileStorage`
+does not encrypt at all.
 
 ## Testing
 
@@ -415,9 +539,11 @@ under test to start it from a known state.
 
 ## Wrapping or writing a storage
 
-To wrap a storage (count, log or delay writes), extend `ForwardingStorage` and
-override what you need. It forwards everything to `inner`, suspends its own
-stores on `clear`, and passes eviction use times through.
+To wrap a storage (to count or log writes, say), extend `ForwardingStorage`
+and override what you need. It forwards everything to `inner`, suspends its
+own stores on `clear`, and passes eviction use times through. A wrapper that
+holds a write, delete or clear back before passing it on must also have `read`
+and `keys` show it from the moment it is called, as described below.
 
 ```dart
 class LoggingStorage extends ForwardingStorage {
@@ -438,11 +564,14 @@ To write one from scratch, implement `Storage`: `read`, `write`, `delete`,
 `deleteAll`, `keys`, `clear` and `close`. `read` is synchronous, because stores
 hydrate in their constructor. From `clear`, call
 `HydratedMobX.suspendAll(storage: this)` before wiping, so no store writes its
-state back. If `deleteAll` or `clear` can wait behind other work (a lock, a
-queue), have `read` and `keys` treat a key as gone from the moment a delete or
-clear naming it is called; otherwise a store built in between hydrates state
-that is then deleted under it. Implement `UseTrackingStorage.markUsed` to take
-part in eviction.
+state back. If `write`, `deleteAll` or `clear` can wait behind other work (a
+lock, a queue), have `read` and `keys` reflect each from the moment it is
+called; otherwise a store built in between hydrates state that is then
+replaced or deleted under it, and its next change overwrites the newer
+state. Implement `UseTrackingStorage.markUsed` to take
+part in eviction, and `UseTimeStorage` (`usedAt`, `setUsedAt`) so that
+`moveTokens` and `transferTokens` keep each key's use time when they move its
+state.
 
 ### Rebuilding a storage
 
@@ -471,13 +600,21 @@ the keys it deletes, and only once they are bound to the new storage.
 - `HydratedStorage` keeps its box in memory, which is what makes `read`
   synchronous. Keep caches bounded with eviction rather than storing
   everything in one box.
+- With `encoding`, every write of a map or list encodes it to UTF-8 JSON to
+  learn its size, and state up to `encodeAbove` then stays a tree. That is at
+  most `encodeAbove` bytes of encoding per write (about 60 µs for 16 KB, AOT
+  on an M4 Pro). Larger state is kept as those bytes, gzipped for
+  `gzipJson`, and every `read` of it decodes them.
+- A `FileStorage` read of a value not in its cache is a synchronous file
+  read and a decode on the calling isolate. `preload` does the file read
+  ahead, asynchronously; the decode still happens at `read`.
 - hive_ce's `IsolatedHive` is not used: its reads are asynchronous, which a
   constructor-time hydration cannot wait for, and every write would still copy
   the whole state to the other isolate from the calling one.
 
 ## Example app
 
-[`example/`](example) has one screen per feature:
+[`example/`](example) has one screen per feature area:
 
 | Screen | Shows |
 | --- | --- |
@@ -488,9 +625,14 @@ the keys it deletes, and only once they are bound to the new storage.
 | Schema migration | Seeding old data with `importData`; `migrate` upgrading or dropping it |
 | Eviction | A per-item cache bounded by `maxEntries` and `evictable` |
 | Observer & errors | Hydration, serialization and closed-storage errors in one log |
-| Storage inspector | Every key in every box, with delete and clear |
+| Storage inspector | Every key in every storage, with delete and clear |
 | Encryption | An AES-256 box; the note is not in the file as plain text |
 | trustToJson | Time per write of a 2000-row state, with and without it |
+| Large state | Notes kept gzipped in a box, moved to a `FileStorage` with `transferTokens`, opened with `preload` |
+
+`moveTokens` and `LegacyTokens` are meant to run once, at app startup, before
+any store exists. The example app has no 1.x keys to move, so it does not call
+them; `test/move_tokens_test.dart` shows them at work.
 
 ```sh
 cd example
@@ -514,6 +656,72 @@ flutter run
 
 Stored data needs no conversion: 1.x boxes open as they are, under the default
 `boxName`, as long as the storage is built in the same directory as before.
+
+### Obfuscated builds
+
+1.x keyed each store by `runtimeType`. In an obfuscated build (Android
+release with `--obfuscate`) that is a short generated name, and in a web
+release build a minified one such as `minified:Ab`. Either changes whenever
+the code around the class changes. Returning
+`'$CounterStore'` from `storagePrefix` then rarely finds the old key. Move
+the state onto fixed prefixes once, at startup, before any store exists:
+
+```dart
+await HydratedMobX.moveTokens(LegacyTokens.match([
+  LegacyStore(
+    prefix: 'user',
+    legacyPrefix: '$UserStore',
+    fields: ['currentUser', 'settings'],
+  ),
+  LegacyStore(
+    prefix: 'chat_',
+    legacyPrefix: '$ChatStore',
+    fields: ['messages'],
+    idPattern: RegExp('[0-9a-f]{32}'), // one key per chat id
+  ),
+]));
+```
+
+`LegacyTokens.match` finds a key by this build's `'$Type'` when the name
+survived, and otherwise by the shape of its value: a key that looks like a
+class name (plus an id, for a keyed store) whose top-level JSON keys fit
+exactly one store. A key with no id moves a keyed store's state to its
+prefix alone, which is where that store reads it when built without a
+`storeId`. A name the obfuscator gave to another class never moves one
+listed store's state onto another, because the shape has to fit either way.
+
+Only the listed stores' prefixes are left alone. A current store you did not
+list, whose state has the same fields as a listed one, could be moved onto it,
+so pass every other prefix your app writes as `reservedPrefixes`:
+
+```dart
+LegacyTokens.match(stores, reservedPrefixes: ['settings', 'draft_'])
+```
+
+With a variable-length `idPattern` such as `RegExp(r'\d+')`, the longest id
+the pattern accepts is taken: `Qz123` moves to id `123`. The pattern is
+anchored for you, so a leading `^` or trailing `$` is ignored.
+
+A 1.x type name longer than a prefix it starts with still moves: a store now
+under `Counter` finds its old `CounterStore` key. Keys whose name no listed
+store could have written, such as `some.key`, are never read.
+
+`moveTokens` takes any `(token, value) => newToken?`, so it also handles a
+renamed `storagePrefix`. `value` is a function that reads the stored value, so
+keys rejected by name are never read:
+
+```dart
+await HydratedMobX.moveTokens(
+  (token, value) =>
+      token.startsWith('todo-') ? 'todo_${token.substring(5)}' : null,
+);
+```
+
+It moves the version key along, never overwrites different state, skips
+tokens of live stores, and can run again after a crash. A key that fails to
+move stays where it is while the others move; pass `onError` to hear about
+it, or the first failure is rethrown at the end. It returns the moves it
+made.
 
 ## More
 

@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## [3.0.0] - unreleased
+
+A major release: the changes below break code that implements, fakes or
+mocks `HydratedStorage` or `ForwardingStorage`. Code that only calls them
+compiles as before.
 
 ### Changed
 
@@ -10,11 +14,16 @@
   compile as before, but an override, a fake or a mock of `evict` must now
   accept `keepLive` and return the set (for mocktail,
   `thenAnswer((_) async => <String>{})`).
-- The `Storage` contract asks more of a storage whose `deleteAll` or `clear`
-  can wait behind other work (a lock, a queue): its `read` and `keys` must
-  treat a key as gone from the moment a delete or clear naming it is called.
-  A storage that deletes synchronously, like `InMemoryStorage`, already
-  does.
+- `HydratedStorage` and `ForwardingStorage` implement the new
+  `UseTimeStorage`, so a hand-written fake that `implements` either one must
+  add `usedAt` and `setUsedAt`. Subclasses inherit them.
+- `Storage.deleteAll` no longer promises one operation: a storage that
+  cannot do that deletes one key at a time, state keys before their version
+  keys.
+- The `Storage` contract asks more of a storage whose `write`, `deleteAll`
+  or `clear` can wait behind other work (a lock, a queue): its `read` and
+  `keys` must reflect each from the moment it is called. A storage that
+  writes and deletes synchronously, like `InMemoryStorage`, already does.
 
 ### Added
 
@@ -25,13 +34,41 @@
   yet from their stored value, so the first eviction after turning tracking
   on ranks them instead of treating all of them as used at that launch. A
   time after the build counts as the build time.
+- `HydratedMobX.moveTokens(to, {storage, onError})` moves stored state to
+  new tokens, with its version key and use time, without overwriting any
+  state, and safe to run again after a crash. A key that fails to move
+  stays put while the rest move.
+- `LegacyTokens.match([LegacyStore(...)])` finds 1.x `runtimeType` keys, by
+  type name or, in obfuscated builds, by the shape of the stored JSON, for
+  `moveTokens`.
+- `HydratedStorage.build(encoding:, encodeAbove:)` keeps state of more than
+  `encodeAbove` bytes (16 KB by default) as UTF-8 JSON
+  (`HydratedEncoding.json`) or gzipped JSON (`HydratedEncoding.gzipJson`)
+  instead of decoded maps and lists. For 200 note-sized states that is 146 MB
+  of heap with `tree`, 29 MB with `json` and 4.0 MB with `gzipJson`. The first
+  build after either setting changes converts the state already in the box,
+  back to `tree` too. Versions before 3.0 cannot read an encoded box.
+- `FileStorage` (`package:hydrated_mobx/file_storage.dart`): one file per
+  key, nothing in memory until read, with `preload`, a bounded cache of
+  recent values, atomic writes and the same eviction as `HydratedStorage`.
+  One storage per directory at a time, per isolate and across processes.
+  Files are not encrypted. Not available on the web.
+- `HydratedMobX.transferTokens(from:, to:, where:, onError:)` moves state
+  between storages, writing before deleting. A token that fails to move
+  stays put while the rest move. The same storage on both sides, wrapped or
+  not, throws an `ArgumentError`.
+- `UseTimeStorage` (`usedAt`, `setUsedAt`), implemented by
+  `HydratedStorage`, `FileStorage` and `ForwardingStorage`, so `moveTokens`
+  and `transferTokens` keep each key's use time.
+- The example app's "Large state" screen.
+- `benchmark/memory_benchmark.dart`, for both storages.
 
 ### Fixed
 
-- `HydratedStorage.read` and `keys` treat a key as gone from the moment a
-  delete or `clear` naming it is queued, so a store built while the delete
-  waits for an earlier write no longer hydrates state that then disappears
-  from disk.
+- `HydratedStorage.read` and `keys` reflect a write, delete or `clear` from
+  the moment it is called, so a store built while it waits for an earlier
+  write no longer hydrates state that is then replaced or deleted, and no
+  longer overwrites the newer state with its next change.
 
 ## [2.0.0] - 2026-10-29
 
