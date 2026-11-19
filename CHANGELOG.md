@@ -1,6 +1,6 @@
 # Changelog
 
-## [3.0.0] - unreleased
+## [3.0.0] - 2026-11-19
 
 A major release: the changes below break code that implements, fakes or
 mocks `HydratedStorage` or `ForwardingStorage`. Code that only calls them
